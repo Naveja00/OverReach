@@ -32,7 +32,7 @@ Enforcement rules:
 ## One-line product
 An MCP server exposing ONE tool, `check_overreach(prompt, diff)`, that audits a code
 diff against the originating natural-language prompt and flags every out-of-scope
-change the agent made. Sold per-call to the agent; CI gate sold as subscription.
+change the agent made.
 
 ## The exact problem (do not solve a different problem)
 Solo developers using Claude Code / Cursor / Aider ask an agent to do a small thing
@@ -247,13 +247,6 @@ overreach/
 6. `src/index.ts` — register the MCP tools, start Streamable HTTP on $PORT.
 7. `tests/check_overreach.test.ts` — run both fixtures end-to-end.
 8. `README.md` — install + the one example.
-
-## PRICING (put in README; implement billing as a stub in V1)
-- Free: 10 checks/day per agent (honor-system / rate-limited by IP).
-- Per-call beyond free: prepaid credits or X402 micropayment (fraction of a cent). STUB
-  this in V1 (log usage, don't actually charge).
-- Subscription (the real revenue, sold to humans): $19/mo GitHub Action that fails PRs
-  with `scope_creep_score == HIGH`; $49/mo team. NOT built in V1 — just document.
 
 ## THE ONE RISK TO DESIGN AROUND
 **Fox guarding the henhouse:** an agent can skip the call or ignore findings. The tool

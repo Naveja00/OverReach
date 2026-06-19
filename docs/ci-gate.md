@@ -58,9 +58,3 @@ The "authorized scope" is extracted from a prompt, resolved in this order:
 - **Different prompt per PR.** Skip `.overreach/prompt.md` and rely on the PR
   body, or edit the "Resolve authorized prompt" step to read from another
   source (a linked issue, an `AGENTS.md`, etc.).
-
-## Pricing note
-
-This open-source Action is free to run (you bring your own LLM key). The hosted
-managed gate with usage billing and team policy config is the subscription
-product — not part of this repo.

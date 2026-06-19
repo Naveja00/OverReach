@@ -1,6 +1,6 @@
 // Scope cache — persists the Stage 1 (LLM) scope-extraction result keyed by
 // hash(prompt + provider + model). Re-running the same prompt (iterating on a
-// diff, a pre-commit re-run, CI re-check) skips the only paid/latency step and
+// diff, a pre-commit re-run, CI re-check) skips the only network/latency step and
 // reuses the previously extracted scope. The cache key includes the model+provider
 // so switching models never serves a stale scope from a different brain.
 //

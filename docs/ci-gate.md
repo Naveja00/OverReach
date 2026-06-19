@@ -17,8 +17,8 @@ Secrets and variables → Actions → New repository secret. Set **one** of:
 | Secret | Notes |
 |---|---|
 | `ANTHROPIC_API_KEY` | Recommended — best verified results (Sonnet 4.6 / Opus 4.6 / Haiku 4.5). |
-| `OPENAI_API_KEY` | OpenAI-compatible (also works for Gemini via `OPENAI_BASE_URL`). |
-| `OLLAMA_API_KEY` | Ollama Cloud; set `OLLAMA_BASE_URL` too if non-default. |
+| `OPENAI_API_KEY` (+ `OPENAI_BASE_URL`) | OpenAI, or any OpenAI-compatible endpoint (OpenRouter, Groq, LM Studio, …). |
+| `OLLAMA_API_KEY` (+ `OLLAMA_BASE_URL`) | Ollama Cloud, or a self-hosted Ollama instance. |
 
 If no key is set, the job posts a one-time setup comment and **skips** — it never
 fails your PRs for lack of a key.

@@ -203,6 +203,16 @@ async function chatOpenAI(model: string, system: string, user: string): Promise<
   const key = openaiKey();
   if (!looksReal(key)) throw new Error("OPENAI_API_KEY not set");
   const base = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+  // JSON mode is great when the server supports it (OpenAI, OpenRouter, Groq) but
+  // some OpenAI-compatible servers (LM Studio with certain models, older Ollama
+  // OpenAI shims) reject `response_format`. Send it only for the real OpenAI
+  // endpoint, or when explicitly opted in via OVERREACH_JSON_MODE=on. The system
+  // prompt already demands JSON-only output and parseScopeJson tolerantly extracts
+  // the first {...} block, so omitting json_object does not weaken correctness.
+  const jsonMode =
+    process.env.OVERREACH_JSON_MODE
+      ? process.env.OVERREACH_JSON_MODE === "on"
+      : base === "https://api.openai.com/v1";
   const resp = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
@@ -210,7 +220,7 @@ async function chatOpenAI(model: string, system: string, user: string): Promise<
       model,
       temperature: 0,
       max_tokens: 1200,
-      response_format: { type: "json_object" },
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       messages: [{ role: "system", content: system }, { role: "user", content: user }],
     }),
   });

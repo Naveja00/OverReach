@@ -55,10 +55,17 @@ cd Overreach
 npm install
 ```
 
-Overreach needs **an API key** for Stage 1 scope extraction — any one of:
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (any OpenAI-compatible endpoint), or
-`OLLAMA_API_KEY` (Ollama Cloud; or run Ollama locally with no key at all). Set it
-in the environment where your agent runs. Without a key, Overreach still runs but
+Overreach needs **an API key** for Stage 1 scope extraction — bring whichever
+provider you already use:
+
+| Provider | Env vars |
+|---|---|
+| Anthropic | `ANTHROPIC_API_KEY` |
+| OpenAI / OpenAI-compatible (OpenRouter, Groq, Together, **LM Studio**, …) | `OPENAI_API_KEY` + `OPENAI_BASE_URL` (e.g. `http://localhost:1234/v1` for LM Studio) |
+| Ollama (Cloud or self-hosted) | `OLLAMA_API_KEY` + `OLLAMA_BASE_URL` |
+
+Pin a provider/model with `SCOPE_PROVIDER` and `OVERREACH_MODEL`. Set the key in
+the environment where your agent runs. Without a key, Overreach still runs but
 Stage 1 returns an empty scope with a warning, so everything in the diff is
 treated as potentially unauthorized — useful as a paranoid tripwire.
 
@@ -75,16 +82,27 @@ Or pipe a diff: `git diff | npx -y -p overreach overreach-cli --prompt "add a lo
 Prints the `CheckResult` JSON (or pretty terminal output). Exits `0` if clean,
 `1` if findings — usable as a CI gate. Zero-key demo: `npx -y -p overreach overreach-cli demo`.
 
-### MCP server (for Claude Desktop / Cursor)
+### MCP server (Claude Code, Cursor, Codex, Claude Desktop)
 
-`stdio` by default:
+Overreach is a stdio MCP server, so any MCP-capable client can connect. Config
+for each:
 
+**Claude Code** — `claude mcp add overreach -- npx -y overreach`
+
+**Claude Desktop / Cursor** — add to your MCP config:
 ```json
 {
   "mcpServers": {
     "overreach": { "command": "npx", "args": ["-y", "overreach"] }
   }
 }
+```
+
+**Codex CLI** — add to `~/.codex/config.toml`:
+```toml
+[mcp_servers.overreach]
+command = "npx"
+args = ["-y", "overreach"]
 ```
 
 Or Streamable HTTP: set `PORT=8787` and POST to `http://localhost:8787/mcp`.

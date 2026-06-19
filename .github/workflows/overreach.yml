@@ -1,0 +1,139 @@
+# Overreach — PR scope-creep gate.
+#
+# Audits each pull request's diff against the prompt that authorized it and
+# fails the PR when scope_creep_score is HIGH (the agent added a dep / env var /
+# endpoint / cron / file / feature the prompt didn't ask for).
+#
+# Prompt source (first found wins):
+#   1. `.overreach/prompt.md` committed in the repo
+#   2. the PR title + body
+#
+# Requires an LLM provider key as a REPOSITORY SECRET for Stage 1 scope
+# extraction. Set ONE of:
+#   ANTHROPIC_API_KEY   (recommended — best verified results, see TESTED-MODELS.md)
+#   OPENAI_API_KEY
+#   OLLAMA_API_KEY      (Ollama Cloud; also set OLLAMA_BASE_URL if needed)
+# If none is set, the job posts a one-time setup comment and skips the audit
+# (it never fails your PRs for lack of a key).
+#
+# Copy this file into YOUR repo at .github/workflows/overreach.yml to enable.
+name: overreach-scope-audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: overreach-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve authorized prompt
+        id: prompt
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+        run: |
+          if [ -f .overreach/prompt.md ]; then
+            cp .overreach/prompt.md "$RUNNER_TEMP/prompt.txt"
+            echo "source=.overreach/prompt.md" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/prompt.txt"
+            echo "source=PR title + body" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr diff "$PR_NUMBER" > "$RUNNER_TEMP/pr.diff"
+          lines=$(wc -l < "$RUNNER_TEMP/pr.diff")
+          echo "PR diff: $lines lines"
+          if [ "$lines" -eq 0 ]; then echo "::notice::No diff to audit."; exit 0; fi
+
+      - name: Check provider key
+        id: keycheck
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$OPENAI_API_KEY" ] || [ -n "$OLLAMA_API_KEY" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Overreach
+        id: overreach
+        if: steps.keycheck.outputs.has_key == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          # Optional — pin a provider/model (defaults: auto-resolve, claude-haiku-4-5
+          # / gpt-4o-mini / glm-5.2 depending on which key is set):
+          # SCOPE_PROVIDER: anthropic
+          # OVERREACH_MODEL: claude-sonnet-4-6
+        run: |
+          set +e
+          {
+            echo "## 🔍 Overreach — scope-creep audit"
+            echo
+            echo "_Prompt source: ${{ steps.prompt.outputs.source }} · ${{ github.event.pull_request.changed_files }} file(s) changed_"
+            echo
+            npx -y -p overreach@latest overreach-cli --prompt "$(cat "$RUNNER_TEMP/prompt.txt")" --diff "$RUNNER_TEMP/pr.diff"
+            echo
+            echo "---"
+            echo "_Every finding is deterministic \`actual − authorized\` set arithmetic from (prompt, diff). [Overreach](https://github.com/Naveja00/OverReach)_"
+          } > "$RUNNER_TEMP/comment.md" 2> "$RUNNER_TEMP/run.log"
+          code=$?
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          # Surface stderr (npx install notices / errors) in the Actions log.
+          [ -s "$RUNNER_TEMP/run.log" ] && cat "$RUNNER_TEMP/run.log" || true
+          exit 0
+
+      - name: Build setup comment (no key)
+        if: steps.keycheck.outputs.has_key == 'false'
+        run: |
+          {
+            echo "## 🔍 Overreach — not configured"
+            echo
+            echo "Overreach is wired into this repo's PR checks, but no LLM provider key is set, so this audit was skipped."
+            echo
+            echo "Add ONE of these repository secrets to enable:"
+            echo "- \`ANTHROPIC_API_KEY\` (recommended — best verified results)"
+            echo "- or \`OPENAI_API_KEY\` / \`OLLAMA_API_KEY\`"
+            echo
+            echo "Docs: https://github.com/Naveja00/OverReach#ci-gate-github-action"
+          } > "$RUNNER_TEMP/comment.md"
+
+      - name: Post / update PR comment
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if gh pr comment "$PR_NUMBER" --edit-last --body-file "$RUNNER_TEMP/comment.md" 2>/dev/null; then
+            :
+          else
+            gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md"
+          fi
+
+      - name: Gate — fail the PR on HIGH
+        if: steps.overreach.outputs.exit == '1'
+        run: |
+          echo "::error::Overreach flagged scope_creep_score=HIGH — the PR adds things the prompt didn't authorize. See the PR comment."
+          exit 1

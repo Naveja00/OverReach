@@ -1,5 +1,9 @@
 # Overreach
 
+[![npm version](https://img.shields.io/npm/v/overreach.svg)](https://www.npmjs.com/package/overreach)
+[![license](https://img.shields.io/npm/l/overreach.svg)](https://github.com/Naveja00/OverReach)
+[![CI](https://github.com/Naveja00/OverReach/actions/workflows/overreach.yml/badge.svg)](https://github.com/Naveja00/OverReach/actions/workflows/overreach.yml)
+
 A standalone MCP tool that catches AI-agent scope creep.
 
 You give it the **prompt** you gave your coding agent, and the **diff** it produced.
@@ -60,13 +64,13 @@ potentially unauthorized — useful for paranoid mode.
 ### CLI (manual check)
 
 ```bash
-npx overreach-cli --prompt "add a login form to the settings page" --diff my-changes.diff
+npx -y -p overreach overreach-cli --prompt "add a login form to the settings page" --diff my-changes.diff
 ```
 
-Or pipe a diff: `git diff | npx overreach-cli --prompt "add a login form to the settings page"`.
+Or pipe a diff: `git diff | npx -y -p overreach overreach-cli --prompt "add a login form to the settings page"`.
 
 Prints the `CheckResult` JSON (or pretty terminal output). Exits `0` if clean,
-`1` if findings — usable as a CI gate. Zero-key demo: `npx overreach-cli demo`.
+`1` if findings — usable as a CI gate. Zero-key demo: `npx -y -p overreach overreach-cli demo`.
 
 ### MCP server (for Claude Desktop / Cursor)
 
@@ -84,6 +88,24 @@ Or Streamable HTTP: set `PORT=8787` and POST to `http://localhost:8787/mcp`.
 
 Tools exposed: `check_overreach(prompt, diff, options?)` and `health`.
 
+#### Register with Claude Code
+
+```bash
+claude mcp add overreach -- npx -y overreach
+```
+
+#### The agent self-audit pattern
+
+Have your agent call `check_overreach` with its own task string + the diff it's
+about to commit, and surface any `HIGH` finding before it ships:
+
+```
+git diff --staged | overreach-cli --prompt "<the task you just gave me>"
+```
+
+This is **best-effort** — an agent can skip the call or ignore the findings
+(fox guarding the henhouse). The hard backstop is the CI gate below.
+
 ### Verify it works (zero API key)
 
 ```bash
@@ -99,6 +121,34 @@ Runs two fixtures through the **real** pipeline with the scope injected via
   expects 0 findings and `LOW`.
 
 Prints `N passed, M failed`. This is the proof it works without spending money.
+
+## CI gate (GitHub Action)
+
+The hard backstop. A workflow runs Overreach on every pull request and **fails
+the PR** when `scope_creep_score=HIGH` — the diff adds a dep / env var /
+endpoint / cron / out-of-scope file the prompt didn't authorize.
+
+Copy [`.github/workflows/overreach.yml`](.github/workflows/overreach.yml) into
+your repo and add `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `OLLAMA_API_KEY`)
+as a repository secret. The prompt comes from `.overreach/prompt.md` in the repo,
+or the PR title + body if that file is absent. The job posts its findings as a PR
+comment and fails the check on `HIGH`. Full setup + customization in
+[`docs/ci-gate.md`](docs/ci-gate.md).
+
+```yaml
+# .github/workflows/overreach.yml  (excerpt)
+- name: Run Overreach
+  run: |
+    npx -y -p overreach@latest overreach-cli \
+      --prompt "$(cat "$RUNNER_TEMP/prompt.txt")" --diff "$RUNNER_TEMP/pr.diff"
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+- name: Gate — fail the PR on HIGH
+  if: steps.overreach.outputs.exit == '1'
+  run: exit 1
+```
+
+This open-source Action is free to run (you bring your own LLM key).
 
 ## Standalone
 

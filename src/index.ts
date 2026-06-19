@@ -6,12 +6,19 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { createRequire } from "node:module";
 import { checkOverreach } from "./tools/check_overreach.js";
-import { PORT } from "./config.js";
+import { PORT, HOST } from "./config.js";
+
+// Read the version from package.json so serverInfo / health stay in sync with
+// npm publishes without a manual bump here. Resolves to the root package.json
+// both in dev (tsx src/index.ts) and in the published tarball (dist/src/index.js).
+const require = createRequire(import.meta.url);
+const VERSION: string = require("../../package.json").version;
 
 const server = new McpServer({
   name: "overreach",
-  version: "0.1.0",
+  version: VERSION,
 });
 
 server.tool(
@@ -31,7 +38,7 @@ server.tool(
 );
 
 server.tool("health", "Health check for the Overreach MCP server.", {}, async () => ({
-  content: [{ type: "text" as const, text: JSON.stringify({ status: "ok", version: "0.1.0" }) }],
+  content: [{ type: "text" as const, text: JSON.stringify({ status: "ok", version: VERSION }) }],
 }));
 
 async function main() {
@@ -50,8 +57,16 @@ async function main() {
         res.writeHead(404).end("Not found. Use /mcp.");
       }
     });
-    httpServer.listen(PORT, () => {
-      console.error(`[overreach] MCP server (Streamable HTTP) on http://localhost:${PORT}/mcp`);
+    httpServer.listen(PORT, HOST, () => {
+      console.error(`[overreach] MCP server (Streamable HTTP) on http://${HOST}:${PORT}/mcp`);
+    });
+    httpServer.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EACCES" || err.code === "EADDRINUSE") {
+        console.error(`[overreach] cannot bind ${HOST}:${PORT} (${err.code}). Pick a different PORT, or check Windows reserved-port ranges / what's already listening.`);
+      } else {
+        console.error("[overreach] HTTP server error:", err.message);
+      }
+      process.exit(1);
     });
   } else {
     // stdio — default for `npx overreach` in Claude Desktop / Cursor.

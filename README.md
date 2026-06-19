@@ -107,6 +107,11 @@ args = ["-y", "overreach"]
 
 Or Streamable HTTP: set `PORT=8787` and POST to `http://localhost:8787/mcp`.
 
+> **The HTTP endpoint has no auth.** It binds to `127.0.0.1` (loopback) by
+> default — safe for local use. Do **not** expose it publicly
+> (`OVERREACH_HOST=0.0.0.0`) without an authed reverse proxy in front: anyone who
+> can reach it can call `check_overreach` and spend your LLM budget.
+
 Tools exposed: `check_overreach(prompt, diff, options?)` and `health`.
 
 #### First-time setup (Claude Code)

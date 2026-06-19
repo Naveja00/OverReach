@@ -23,6 +23,7 @@ export async function checkOverreach(
   let scope: Scope;
   let warning: string | undefined;
   let telemetry = undefined;
+  let skipped = false;
 
   if (options.scopeOverride) {
     scope = options.scopeOverride; // tests / demo: zero LLM, fully deterministic
@@ -31,11 +32,22 @@ export async function checkOverreach(
     scope = extracted.scope;
     warning = extracted.warning;
     telemetry = extracted.telemetry;
+    // A real outage (key configured but extraction failed) => SKIP the audit
+    // (findings=[], LOW) so a CI gate doesn't block PRs on a provider outage.
+    // A no-key run that fell back to unreachable local Ollama is NOT skipped —
+    // it stays in paranoid mode (flag everything), the documented tripwire.
+    if (extracted.extractionFailed && extracted.keyConfigured) skipped = true;
   }
 
   const actual = parseDiff(diff);
   let { findings, score } = compare(actual, scope);
-  const summary = warning
+  if (skipped) {
+    findings = [];
+    score = "LOW";
+  }
+  const summary = skipped
+    ? `Scope extraction failed (provider unreachable) — audit skipped, not blocked. [WARNING: ${warning || "extraction failed"}]`
+    : warning
     ? `${summarize(findings, score)} [WARNING: ${warning}]`
     : summarize(findings, score);
 
@@ -47,13 +59,15 @@ export async function checkOverreach(
     scope_creep_score: score,
     summary,
   };
+  if (skipped) result.skipped = true;
   if (telemetry) result.telemetry = telemetry;
 
   // Execution contract (optional). Promotes the scope to a versioned
   // authorization artifact with audit metadata; narrows against a parent if one
   // is supplied. The contract id is deterministic (hash of prompt+diff+parent)
-  // so retries produce the same contract, not phantoms.
-  if (options.emitContract) {
+  // so retries produce the same contract, not phantoms. Skipped on a failed
+  // extraction — a contract from an empty scope would be meaningless.
+  if (options.emitContract && !skipped) {
     const model = options.scopeOverride ? "override" : resolveModel(resolveProvider());
     const contract = buildContract({
       prompt,

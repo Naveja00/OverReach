@@ -90,6 +90,12 @@ export interface CheckResult {
   findings: Finding[];
   scope_creep_score: CreepScore;
   summary: string;
+  // True when the audit was SKIPPED: Stage 1 scope extraction failed AND a real
+  // provider key was configured (an outage, not an intentional no-key paranoid
+  // run). In that case findings=[] and score=LOW so a CI gate does not block PRs
+  // on a provider outage. A no-key run that falls back to an unreachable local
+  // Ollama is NOT skipped — it stays in paranoid mode (flag everything).
+  skipped?: boolean;
   telemetry?: ReconcileTelemetry;
   contract?: ExecutionContract;
   contractNarrowing?: NarrowingResult;

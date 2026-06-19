@@ -1,6 +1,6 @@
 {
   "name": "overreach",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "MCP tool that audits a code diff against the originating prompt and flags out-of-scope (overreaching) changes an AI agent made.",
   "type": "module",
   "license": "MIT",

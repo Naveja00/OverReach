@@ -21,6 +21,12 @@ export const OLLAMA_MODEL = "glm-5.2"; // Ollama Cloud (ollama.com) uses bare mo
 // fine — the server only binds at startup.
 export const PORT = parseInt(process.env.PORT || "0", 10);
 
+// Bind address for the Streamable HTTP server. Defaults to loopback (127.0.0.1)
+// for safety: the HTTP endpoint has NO auth, so binding 0.0.0.0 would let anyone
+// on the network call check_overreach and spend your LLM budget. Set
+// OVERREACH_HOST=0.0.0.0 only behind an authed reverse proxy.
+export const HOST = process.env.OVERREACH_HOST || "127.0.0.1";
+
 function looksReal(key: string): boolean {
   return Boolean(key && !key.includes("your_") && key.length > 8);
 }

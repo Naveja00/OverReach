@@ -149,6 +149,14 @@ function pretty(result: CheckResult, meta: { source: string; cached: boolean; pr
   L.push(`  ${badge}`);
   L.push("");
 
+  if (result.skipped) {
+    L.push(c(ANSI.yellow)("  ⚠ Audit skipped — Stage 1 scope extraction failed (provider unreachable)."));
+    L.push(c(ANSI.dim)(`  Not blocked. ${result.summary}`));
+    L.push("");
+    L.push(c(ANSI.dim)(`  ${meta.diffLines} diff lines · prompt ${meta.promptLen} chars`));
+    return L.join("\n");
+  }
+
   if (result.findings.length === 0) {
     L.push(c(ANSI.green)("  ✓ No overreach — the diff stayed within the prompt's scope."));
     L.push("");
@@ -223,8 +231,10 @@ async function main() {
   const result = await checkOverreach(prompt, diff, options);
 
   // On a fresh Stage 1 extraction (no override, no cache hit), persist the scope
-  // so the next run of the same prompt is free.
-  if (!scopeOverride && !args.noCache) {
+  // so the next run of the same prompt is free. Never cache a skipped/failed
+  // extraction — that would persist an empty scope and poison later runs with
+  // paranoid-mode false positives even after the provider recovers.
+  if (!scopeOverride && !args.noCache && !result.skipped) {
     putScopeCache(prompt, provider, model, result.scope);
   }
 

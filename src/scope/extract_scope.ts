@@ -19,6 +19,7 @@ import {
   ollamaBaseUrl,
   resolveProvider,
   resolveModel,
+  type Provider,
 } from "../config.js";
 
 const EMPTY_SCOPE: Scope = {
@@ -76,10 +77,21 @@ export function hasKey(): boolean {
   return false;
 }
 
+// Whether a real provider key is configured for the resolved provider. Used to
+// distinguish an intentional no-key paranoid run (keyless local Ollama fallback)
+// from a real outage (key set but the call failed). The former keeps flagging
+// everything (the documented tripwire); the latter should SKIP, not block PRs.
+function keyConfiguredFor(provider: Provider): boolean {
+  if (provider === "anthropic") return looksReal(anthropicKey());
+  if (provider === "openai") return looksReal(openaiKey());
+  return looksReal(ollamaKey()); // keyless local Ollama = not "configured"
+}
+
 // ── public entrypoint ──────────────────────────────────────────────────────
-export async function extractScope(prompt: string): Promise<{ scope: Scope; warning?: string; telemetry?: ReconcileTelemetry }> {
+export async function extractScope(prompt: string): Promise<{ scope: Scope; warning?: string; telemetry?: ReconcileTelemetry; extractionFailed?: boolean; keyConfigured?: boolean }> {
   const provider = resolveProvider();
   const model = resolveModel(provider);
+  const keyConfigured = keyConfiguredFor(provider);
 
   const chunks = chunkPrompt(prompt, CHUNK_MAX);
   const chunked = chunks.length > 1;
@@ -91,13 +103,13 @@ export async function extractScope(prompt: string): Promise<{ scope: Scope; warn
       const results = await Promise.all(chunks.map((c) => extractOne(model, provider, c)));
       const parsed = results.map((t) => parseScopeJson(t)).filter(Boolean) as Scope[];
       if (parsed.length === 0) {
-        if (attempt === 2) return emptyWithWarning(`Could not parse scope JSON from ${provider}/${model}.`);
+        if (attempt === 2) return { ...emptyWithWarning(`Could not parse scope JSON from ${provider}/${model}.`), extractionFailed: true, keyConfigured };
         continue;
       }
       sectionScopes.push(...parsed);
       break;
     } catch (err) {
-      if (attempt === 2) return emptyWithWarning(`Scope extraction failed after retries (${provider}/${model}): ${(err as Error).message}`);
+      if (attempt === 2) return { ...emptyWithWarning(`Scope extraction failed after retries (${provider}/${model}): ${(err as Error).message}`), extractionFailed: true, keyConfigured };
     }
   }
 

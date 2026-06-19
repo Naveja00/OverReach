@@ -89,17 +89,22 @@ jobs:
           # OVERREACH_MODEL: claude-sonnet-4-6
         run: |
           set +e
+          # Run the CLI and capture ITS exit code (not a surrounding echo's).
+          # stdout -> comment body; stderr (npx install notices / errors) -> run.log.
+          npx -y -p overreach@latest overreach-cli \
+            --prompt "$(cat "$RUNNER_TEMP/prompt.txt")" --diff "$RUNNER_TEMP/pr.diff" \
+            > "$RUNNER_TEMP/cli.out" 2> "$RUNNER_TEMP/run.log"
+          code=$?
           {
             echo "## 🔍 Overreach — scope-creep audit"
             echo
             echo "_Prompt source: ${{ steps.prompt.outputs.source }} · ${{ github.event.pull_request.changed_files }} file(s) changed_"
             echo
-            npx -y -p overreach@latest overreach-cli --prompt "$(cat "$RUNNER_TEMP/prompt.txt")" --diff "$RUNNER_TEMP/pr.diff"
+            cat "$RUNNER_TEMP/cli.out"
             echo
             echo "---"
             echo "_Every finding is deterministic \`actual − authorized\` set arithmetic from (prompt, diff). [Overreach](https://github.com/Naveja00/OverReach)_"
-          } > "$RUNNER_TEMP/comment.md" 2> "$RUNNER_TEMP/run.log"
-          code=$?
+          } > "$RUNNER_TEMP/comment.md"
           echo "exit=$code" >> "$GITHUB_OUTPUT"
           # Surface stderr (npx install notices / errors) in the Actions log.
           [ -s "$RUNNER_TEMP/run.log" ] && cat "$RUNNER_TEMP/run.log" || true
@@ -135,5 +140,13 @@ jobs:
       - name: Gate — fail the PR on HIGH
         if: steps.overreach.outputs.exit == '1'
         run: |
-          echo "::error::Overreach flagged scope_creep_score=HIGH — the PR adds things the prompt didn't authorize. See the PR comment."
-          exit 1
+          # Only block if the CLI actually ran and reported HIGH. Guards against an
+          # npx/npm outage masquerading as exit 1 — that would block PRs on an
+          # infrastructure problem, not a real scope-creep finding. (A provider
+          # outage is already handled inside the CLI: it returns skipped/LOW/exit 0.)
+          if grep -q 'scope_creep_score' "$RUNNER_TEMP/comment.md"; then
+            echo "::error::Overreach flagged scope_creep_score=HIGH — the PR adds things the prompt didn't authorize. See the PR comment."
+            exit 1
+          else
+            echo "::notice::Overreach did not complete (install/provider error) — not blocking the PR. See the PR comment + Actions log."
+          fi

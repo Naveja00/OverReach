@@ -193,7 +193,17 @@ This open-source Action is free to run (you bring your own LLM key).
 ## Standalone
 
 Overreach is fully self-contained. It does **not** import or depend on any other
-project. It reads only its own process environment.
+project. It reads only its own process environment. No telemetry, no call-home —
+it runs entirely on your machine.
+
+## Bugs & feedback
+
+If Overreach misses something it should flag, or flags something the prompt
+authorized, open an issue with the **prompt + the smallest repro diff**:
+
+https://github.com/Naveja00/OverReach/issues
+
+There's a bug-report template that asks for exactly that.
 
 ## License
 

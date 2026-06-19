@@ -8,8 +8,8 @@ covered by a zero-key suite (45/45, no LLM). This page reports the
 deterministic parse → set-arithmetic compare) per model.
 
 This is a **measurement**, not a 100%-green claim. The frozen v1.0 contract is
-held constant across all models; weaker models are documented here as
-best-effort, not chased by overfitting the pipeline to make them pass.
+held constant across all models; a weaker model is documented here as-is, not
+chased by overfitting the pipeline to make it pass.
 
 ## Results (consolidated across runs)
 
@@ -20,27 +20,14 @@ best-effort, not chased by overfitting the pipeline to make them pass.
 | glm-5.2 | Ollama Cloud | 17/17 | 26/26 | 31/31 | 8/8 | **82/82** | ✅ recommended |
 | kimi-k2.7-code | Ollama Cloud | 17/17 | 26/26 | 31/31 | 8/8 | **82/82** | ✅ supported |
 | minimax-m3 | Ollama Cloud | 16/17¹ | 26/26 | 31/31 | 8/8 | **81/82** | ✅ supported (99%) |
-| gemini-2.5-flash | Google (OpenAI-compat) | — | —² | 6/10³ | —² | partial | ⚠ best-effort |
 
-¹ minimax-m3 puts `logout button` in features but not the navbar target on one
-e2e case — a model-specific extraction miss, not a pipeline bug. One re-run
-ERRORED on a transient Ollama Cloud outage mid-suite (cloud reliability, not a
-real failure); the three substantive suites pass clean (65/65) on every run
-that completes.
-
-² Gemini's free tier is capped at **20 requests/day** for gemini-2.5-flash, so
-the full battery (82 calls) cannot complete in a day without a paid tier. The
-per-minute throttle (13s/call) is respected; the daily wall is the blocker.
-
-³ Gemini has a **systematic under-extraction gap**, confirmed identically by a
-side-by-side diagnostic and the `large` Case A run: it under-populates
-`files_allowed`, `endpoints_allowed`, and `env_allowed` from the prompt, which
-causes two failure modes — (a) it **false-flags authorized items** as overreach
-(recharts dep, `/api/metrics` endpoint, `METRICS_API_KEY` env were all named in
-the prompt but flagged) and (b) it **misses a smuggled file** (`billing.ts`).
-This is a model-capability limit on free-tier Gemini, documented here rather
-than chased — overfitting the shared system prompt to fix it would risk the
-models that pass clean.
+¹ minimax-m3 **consistently** scores 81/82 — on every run that completes the
+e2e suite it misses the same one case: it extracts `logout button` as a feature
+but not the navbar target, so the navbar file looks unauthorized. A consistent
+model-specific extraction miss, not cloud noise (and not a pipeline bug — the
+other four models pass that case). One re-run ERRORED mid-suite on a transient
+Ollama Cloud outage; the three substantive suites pass clean (65/65) on every
+run that completes.
 
 ## How to reproduce
 

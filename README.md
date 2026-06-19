@@ -13,6 +13,24 @@ that you never asked for.
 
 > "turns out my ai assistant had been extremely making product decisions without me"
 
+## Try it (no key needed)
+
+```bash
+npx -y -p overreach overreach-cli demo
+```
+
+Runs the real pipeline on a sample diff — no API key, costs nothing. Exits `1`
+with a `HIGH` scope-creep finding (the demo prompt asks for a login form; the diff
+smuggles in Stripe, an env var, an endpoint, and a cron job). That's the whole
+product in one command.
+
+> **Reviewers:** Overreach needs one LLM provider key (`ANTHROPIC_API_KEY`,
+> `OPENAI_API_KEY`, or `OLLAMA_API_KEY`) for real scope extraction. **Without a key
+> it still runs, but in paranoid mode — it flags everything in the diff as
+> potentially unauthorized.** That's an intentional no-key tripwire, not a bug. The
+> `demo` command above runs with the scope injected, so it shows correct behavior
+> with no key.
+
 ## What it checks
 
 A diff is flagged when it adds something the prompt never authorized:

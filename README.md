@@ -55,9 +55,12 @@ cd Overreach
 npm install
 ```
 
-Set `ANTHROPIC_API_KEY` (Stage 1 only). Without it, Overreach still runs but Stage 1
-returns an empty scope with a warning, so everything in the diff is treated as
-potentially unauthorized — useful for paranoid mode.
+Overreach needs **an API key** for Stage 1 scope extraction — any one of:
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (any OpenAI-compatible endpoint), or
+`OLLAMA_API_KEY` (Ollama Cloud; or run Ollama locally with no key at all). Set it
+in the environment where your agent runs. Without a key, Overreach still runs but
+Stage 1 returns an empty scope with a warning, so everything in the diff is
+treated as potentially unauthorized — useful as a paranoid tripwire.
 
 ## Use it
 
@@ -79,7 +82,7 @@ Prints the `CheckResult` JSON (or pretty terminal output). Exits `0` if clean,
 ```json
 {
   "mcpServers": {
-    "overreach": { "command": "npx", "args": ["overreach"] }
+    "overreach": { "command": "npx", "args": ["-y", "overreach"] }
   }
 }
 ```
@@ -88,11 +91,30 @@ Or Streamable HTTP: set `PORT=8787` and POST to `http://localhost:8787/mcp`.
 
 Tools exposed: `check_overreach(prompt, diff, options?)` and `health`.
 
-#### Register with Claude Code
+#### First-time setup (Claude Code)
 
 ```bash
+# 1. Register the server with Claude Code (one time)
 claude mcp add overreach -- npx -y overreach
+
+# 2. Restart your Claude Code session
+#    (a session already open won't see the new server until you quit and reopen it)
+
+# 3. Set an API key in the environment you launch Claude Code from
+export ANTHROPIC_API_KEY=sk-...     # or OPENAI_API_KEY / OLLAMA_API_KEY
 ```
+
+After the restart, every new session has `check_overreach` available — no per-task
+setup. The agent calls it when it decides it's relevant.
+
+> **The key isn't passed through automatically.** The MCP server is a separate
+> process; your agent does **not** hand it its own credentials. If you log in to
+> Claude Code with `claude login` (OAuth / subscription), there's no
+> `ANTHROPIC_API_KEY` in the environment — so export one (any provider works; local
+> Ollama needs no key), or for Claude Desktop / Cursor add it to the server's `env`:
+> ```json
+> { "mcpServers": { "overreach": { "command": "npx", "args": ["-y", "overreach"], "env": { "ANTHROPIC_API_KEY": "sk-..." } } } }
+> ```
 
 #### The agent self-audit pattern
 

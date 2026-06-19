@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/components/navbar.tsx", "navbar"],
+  "features_allowed": ["logout button", "Log out", "onLogout"],
+  "endpoints_allowed": [],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": []
+}

@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/main.py", "main"],
+  "features_allowed": ["health endpoint", "health"],
+  "endpoints_allowed": ["/health"],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": []
+}

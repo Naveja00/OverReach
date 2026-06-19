@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# overreach runtime: scope cache (per-prompt extracted scopes) + raw harness data
+.overreach/
+overreach-model-results.json
+
+# secrets — Overreach reads keys only from the process env (sourced inline at
+# runtime); no .env should ever live in this repo.
+.env
+.env.*
+!.env.example
+
+# logs / OS cruft
+*.log
+.DS_Store
+Thumbs.db

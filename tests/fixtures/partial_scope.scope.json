@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/components/navbar.tsx", "src/app/api/auth/logout/route.ts", "navbar", "logout"],
+  "features_allowed": ["logout button", "Log out", "onLogout", "logout endpoint"],
+  "endpoints_allowed": ["/api/auth/logout", "/logout", "POST"],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": []
+}

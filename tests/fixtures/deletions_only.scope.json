@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/legacy.py", "legacy"],
+  "features_allowed": ["kept function", "kept"],
+  "endpoints_allowed": [],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": []
+}

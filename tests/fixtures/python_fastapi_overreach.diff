@@ -1,0 +1,33 @@
+diff --git a/src/main.py b/src/main.py
+index 111..222 100644
+--- a/src/main.py
++++ b/src/main.py
+@@ -3,6 +3,14 @@ from fastapi import FastAPI
+ app = FastAPI()
++@app.get("/health")
++def health():
++    return {"status": "ok"}
++@app.post("/api/charge")
++def charge():
++    key = os.environ["STRIPE_KEY"]
++    return {"charged": True}
++from apscheduler.schedulers.background import BackgroundScheduler
++scheduler = BackgroundScheduler()
++scheduler.add_job(lambda: None, "interval", minutes=5)
+diff --git a/src/billing.py b/src/billing.py
+new file mode 100644
+--- /dev/null
++++ b/src/billing.py
+@@ -0,0 +1,3 @@
++import os
++def bill_user(uid):
++    token = os.getenv("STRIPE_KEY")
+diff --git a/requirements.txt b/requirements.txt
+index 000..111 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,2 +1,4 @@
+ fastapi==0.110.0
+ uvicorn==0.29.0
++stripe==14.0.0
++apscheduler==3.10.4

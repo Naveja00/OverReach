@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["README.md"],
+  "features_allowed": ["project description"],
+  "endpoints_allowed": [],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": []
+}

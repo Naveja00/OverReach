@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/pages/settings.tsx", "settings"],
+  "features_allowed": ["login form", "LoginForm"],
+  "endpoints_allowed": [],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": []
+}

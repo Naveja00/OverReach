@@ -1,0 +1,31 @@
+{
+  "name": "overreach",
+  "version": "0.1.0",
+  "description": "MCP tool that audits a code diff against the originating prompt and flags out-of-scope (overreaching) changes an AI agent made.",
+  "type": "module",
+  "bin": {
+    "overreach": "dist/index.js"
+  },
+  "scripts": {
+    "test": "tsx tests/run.ts",
+    "test:edge": "tsx tests/edge_and_smuggle.ts",
+    "test:e2e": "tsx tests/e2e_ollama.ts",
+    "simulate": "tsx tests/simulate.ts",
+    "simulate:large": "tsx tests/simulate_large.ts",
+    "simulate:stress": "tsx tests/simulate_stress.ts",
+    "simulate:false-denial": "tsx tests/simulate_false_denial.ts",
+    "harness": "tsx tests/multi_model.ts",
+    "cli": "tsx src/cli.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@anthropic-ai/sdk": "^0.32.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

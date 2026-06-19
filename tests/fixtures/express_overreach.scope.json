@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["server.js"],
+  "features_allowed": ["users list endpoint", "listUsers"],
+  "endpoints_allowed": ["/users", "GET /users"],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": []
+}

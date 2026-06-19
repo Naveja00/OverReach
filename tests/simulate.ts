@@ -4,7 +4,8 @@
 // Run: npm run simulate   (needs OLLAMA creds; sources cloud key inline)
 
 import { checkOverreach } from "../src/tools/check_overreach.js";
-import { extractScope, hasKey } from "../src/scope/extract_scope.js";
+import { hasKey } from "../src/scope/extract_scope.js";
+import { probeReachable } from "./lib/probe.js";
 import { resolveProvider, resolveModel } from "../src/config.js";
 
 type Expect =
@@ -286,17 +287,19 @@ async function main() {
     console.log("SKIP: needs SCOPE_PROVIDER=ollama + OLLAMA creds. (run via the sourced .env command)");
     process.exit(0);
   }
-  // pre-flight reachability
-  const probe = await extractScope("add a hello function");
-  if (probe.warning && /failed|parse/i.test(probe.warning)) {
-    console.log(`SKIP: cloud unreachable: ${probe.warning}`);
+  // pre-flight reachability (with retry — a single blip must not skip the suite)
+  const pre = await probeReachable("add a hello function");
+  if (!pre.ok) {
+    console.log(`SKIP: cloud unreachable: ${pre.warning}`);
     process.exit(0);
   }
-  console.log(`\nOverreach simulation â€” ${cases.length} cases â€” model: ${model} @ ${process.env.OLLAMA_BASE_URL}\n${"=".repeat(80)}`);
+  const maxN = parseInt(process.env.HARNESS_MAX_CASES || "0", 10);
+  const sel = maxN > 0 ? cases.slice(0, maxN) : cases;
+  console.log(`\nOverreach simulation â€” ${sel.length} cases${maxN > 0 ? ` (sliced from ${cases.length} via HARNESS_MAX_CASES)` : ""} â€” model: ${model} @ ${process.env.OLLAMA_BASE_URL}\n${"=".repeat(80)}`);
 
   let pass = 0, fail = 0;
   const failed: string[] = [];
-  for (const c of cases) {
+  for (const c of sel) {
     process.stdout.write(`${c.name.padEnd(32)} `);
     const r = await checkOverreach(c.prompt, c.diff);
     const ev = evaluate(c.name, r, c.expect);
@@ -305,7 +308,7 @@ async function main() {
     console.log(`        scope: ${JSON.stringify(r.scope)}`);
   }
 
-  console.log(`\n${"=".repeat(80)}\nSIMULATION RESULT: ${pass}/${cases.length} passed, ${fail} failed  (model: ${model} @ cloud)`);
+  console.log(`\n${"=".repeat(80)}\nSIMULATION RESULT: ${pass}/${sel.length} passed, ${fail} failed  (model: ${model} @ cloud)`);
   if (failed.length) console.log("Failed cases: " + failed.join(", "));
   process.exit(fail === 0 ? 0 : 1);
 }

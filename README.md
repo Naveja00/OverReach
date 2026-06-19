@@ -60,10 +60,13 @@ potentially unauthorized — useful for paranoid mode.
 ### CLI (manual check)
 
 ```bash
-npx overreach "add a login form to the settings page" my-changes.diff
+npx overreach-cli --prompt "add a login form to the settings page" --diff my-changes.diff
 ```
 
-Prints the `CheckResult` JSON. Exits `0` if clean, `1` if findings.
+Or pipe a diff: `git diff | npx overreach-cli --prompt "add a login form to the settings page"`.
+
+Prints the `CheckResult` JSON (or pretty terminal output). Exits `0` if clean,
+`1` if findings — usable as a CI gate. Zero-key demo: `npx overreach-cli demo`.
 
 ### MCP server (for Claude Desktop / Cursor)
 

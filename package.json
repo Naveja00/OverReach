@@ -3,8 +3,33 @@
   "version": "0.1.0",
   "description": "MCP tool that audits a code diff against the originating prompt and flags out-of-scope (overreaching) changes an AI agent made.",
   "type": "module",
+  "license": "MIT",
   "bin": {
-    "overreach": "dist/index.js"
+    "overreach": "dist/src/index.js",
+    "overreach-cli": "dist/src/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-coding",
+    "scope-creep",
+    "code-review",
+    "claude",
+    "cursor",
+    "agent",
+    "diff",
+    "lint"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "test": "tsx tests/run.ts",

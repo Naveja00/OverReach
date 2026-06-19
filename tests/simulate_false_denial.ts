@@ -20,7 +20,8 @@
 // Run: npm run simulate:false-denial  (needs OLLAMA creds)
 
 import { checkOverreach } from "../src/tools/check_overreach.js";
-import { extractScope, hasKey } from "../src/scope/extract_scope.js";
+import { hasKey } from "../src/scope/extract_scope.js";
+import { probeReachable } from "./lib/probe.js";
 import { resolveProvider, resolveModel } from "../src/config.js";
 
 const h = (path: string) => `diff --git a/${path} b/${path}\nindex 111..222 100644\n--- a/${path}\n+++ b/${path}\n`;
@@ -169,12 +170,14 @@ async function main() {
   const provider = resolveProvider();
   const model = resolveModel(provider);
   if ((!process.env.OVERREACH_HARNESS && provider !== "ollama") || !hasKey()) { console.log("SKIP: needs SCOPE_PROVIDER=ollama + OLLAMA creds."); process.exit(0); }
-  const probe = await extractScope("add a hello function");
-  if (probe.warning && /failed|parse/i.test(probe.warning)) { console.log(`SKIP: cloud unreachable: ${probe.warning}`); process.exit(0); }
+  const pre = await probeReachable("add a hello function");
+  if (!pre.ok) { console.log(`SKIP: cloud unreachable: ${pre.warning}`); process.exit(0); }
 
-  const fpCases = cases.filter((c) => c.expect.kind === "fp");
-  const denialCases = cases.filter((c) => c.expect.kind === "denial");
-  console.log(`\nFALSE-DENIAL SUITE â€” ${cases.length} cases (${fpCases.length} FP-rate, ${denialCases.length} denial-rate) â€” model: ${model} @ ${process.env.OLLAMA_BASE_URL}`);
+  const maxN = parseInt(process.env.HARNESS_MAX_CASES || "0", 10);
+  const sel = maxN > 0 ? cases.slice(0, maxN) : cases;
+  const fpCases = sel.filter((c) => c.expect.kind === "fp");
+  const denialCases = sel.filter((c) => c.expect.kind === "denial");
+  console.log(`\nFALSE-DENIAL SUITE â€” ${sel.length} cases${maxN > 0 ? ` (sliced from ${cases.length} via HARNESS_MAX_CASES)` : ""} (${fpCases.length} FP-rate, ${denialCases.length} denial-rate) â€” model: ${model} @ ${process.env.OLLAMA_BASE_URL}`);
   console.log(`STRICT MODE: vague prompts are expected to surface findings (prompt-hygiene signal).\n${"=".repeat(92)}`);
 
   let pass = 0, fail = 0;
@@ -182,7 +185,7 @@ async function main() {
   let totalImplied = 0;
   let reconcileChangedCount = 0;
 
-  for (const c of cases) {
+  for (const c of sel) {
     const tag = c.expect.kind === "fp" ? "FP " : "DEN";
     process.stdout.write(`${tag} ${c.name.padEnd(36)} `);
     const r = await checkOverreach(c.prompt, c.diff);
@@ -198,7 +201,7 @@ async function main() {
   }
 
   console.log(`${"=".repeat(92)}`);
-  console.log(`FALSE-DENIAL SUITE: ${pass}/${cases.length} passed, ${fail} failed  (model: ${model} @ cloud)`);
+  console.log(`FALSE-DENIAL SUITE: ${pass}/${sel.length} passed, ${fail} failed  (model: ${model} @ cloud)`);
   console.log(`  FP-rate:        ${fpCases.length} cases â€” any finding here is a real false positive.`);
   console.log(`  Denial-rate:    ${denialCases.length} vague cases surfaced ${totalImplied} implied-scope findings total (informational â€” this is the strict-mode aggressiveness number).`);
   console.log(`  Reconcile:      changed the scope on ${reconcileChangedCount}/${cases.length} runs (telemetry live, no hardcoded rate).`);

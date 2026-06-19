@@ -31,11 +31,19 @@ interface Target {
   axis: "model" | "format";
   note: string;
   env: Record<string, string>; // overrides applied on top of process.env
+  // keys to DELETE from the inherited env for this target's child processes +
+  // ping (e.g. a shell-wide ANTHROPIC_BASE_URL pointing at a local proxy must
+  // be dropped so the Anthropic SDK hits api.anthropic.com directly).
+  envDelete?: string[];
 }
 
-const OLLAMA_CLOUD = "https://ollama.com";
+const OLLAMA_CLOUD = process.env.HARNESS_OLLAMA_BASE_URL || "https://ollama.com";
 const ollamaModels = (process.env.HARNESS_OLLAMA_MODELS || "glm-5.2,gemma3,qwen2.5,deepseek-r1")
   .split(",").map((s) => s.trim()).filter(Boolean);
+
+function looksRealKey(k: string | undefined): boolean {
+  return Boolean(k && !k.includes("your_") && k.length > 8);
+}
 
 function buildTargets(): Target[] {
   const t: Target[] = [];
@@ -48,19 +56,47 @@ function buildTargets(): Target[] {
       env: { SCOPE_PROVIDER: "ollama", OLLAMA_BASE_URL: OLLAMA_CLOUD, OVERREACH_MODEL: m },
     });
   }
-  // Axis 2 — API-format-robustness (different provider formats, real models).
-  t.push({
-    label: "gpt-4o-mini@openai",
-    axis: "format",
-    note: "OpenAI native API format",
-    env: { SCOPE_PROVIDER: "openai", OVERREACH_MODEL: "gpt-4o-mini" },
-  });
-  t.push({
-    label: "claude-haiku-4.5@anthropic",
-    axis: "format",
-    note: "Anthropic native API format",
-    env: { SCOPE_PROVIDER: "anthropic", OVERREACH_MODEL: "claude-haiku-4-5-20251001" },
-  });
+  // Axis 2 — API-format-robustness (different provider formats). Only add a
+  // format target when its key is actually present in the env (sourced inline,
+  // never written into the repo) — avoids wasted 401s and false "unavailable"
+  // rows for providers the operator didn't configure. Skip all of them with
+  // HARNESS_NO_FORMAT=1.
+  if (!process.env.HARNESS_NO_FORMAT) {
+    // Google Gemini via its OpenAI-compatible endpoint (key from GEMINI_API_KEY).
+    if (looksRealKey(process.env.GEMINI_API_KEY)) {
+      t.push({
+        label: "gemini-2.5-flash@google",
+        axis: "format",
+        note: "Google Gemini (OpenAI-compat endpoint)",
+        env: {
+          SCOPE_PROVIDER: "openai",
+          OPENAI_API_KEY: process.env.GEMINI_API_KEY as string,
+          OPENAI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai",
+          OVERREACH_MODEL: "gemini-2.5-flash",
+        },
+      });
+    }
+    if (looksRealKey(process.env.OPENAI_API_KEY)) {
+      t.push({
+        label: "gpt-4o-mini@openai",
+        axis: "format",
+        note: "OpenAI native API format",
+        env: { SCOPE_PROVIDER: "openai", OVERREACH_MODEL: "gpt-4o-mini" },
+      });
+    }
+    if (looksRealKey(process.env.ANTHROPIC_API_KEY)) {
+      const anthropicModel = process.env.HARNESS_ANTHROPIC_MODEL || "claude-sonnet-4-6";
+      t.push({
+        label: `${anthropicModel}@anthropic`,
+        axis: "format",
+        note: "Anthropic native API format",
+        env: { SCOPE_PROVIDER: "anthropic", OVERREACH_MODEL: anthropicModel },
+        // Drop an inherited ANTHROPIC_BASE_URL (e.g. a shell-wide proxy at a
+        // local Ollama port) so the SDK calls api.anthropic.com directly.
+        envDelete: ["ANTHROPIC_BASE_URL"],
+      });
+    }
+  }
   return t;
 }
 
@@ -86,11 +122,13 @@ interface SuiteResult {
   failingCases: string[];
   reconcileChanged?: number;
   reconcileTotal?: number;
+  skipReason?: string;
   raw?: string;
 }
 
-// Parse a suite's stdout for the summary line, failing-case names, and reconcile.
-function parseSuite(out: string): { passed?: number; total?: number; fails: string[]; recChanged?: number; recTotal?: number; skipped: boolean } {
+// Parse a suite's stdout for the summary line, failing-case names, reconcile, and
+// (if it SKIPped) the reason the suite gave for skipping.
+function parseSuite(out: string): { passed?: number; total?: number; fails: string[]; recChanged?: number; recTotal?: number; skipped: boolean; skipReason?: string } {
   const fails: string[] = [];
   for (const line of out.split("\n")) {
     const m = line.match(/^\s*FAIL\s+(?:.+\s—\s+)?(.+)/);
@@ -107,15 +145,18 @@ function parseSuite(out: string): { passed?: number; total?: number; fails: stri
   let recChanged: number | undefined, recTotal: number | undefined;
   const rm = out.match(/changed the scope on\s+(\d+)\s*\/\s*(\d+)\s*runs/i);
   if (rm) { recChanged = +rm[1]; recTotal = +rm[2]; }
-  const skipped = /(^|\n)SKIP:/.test(out) || /\nSKIP /.test(out);
-  return { passed, total, fails, recChanged, recTotal, skipped };
+  const skipLine = out.split("\n").map((l) => l.trim()).find((l) => /^SKIP[:\s]/i.test(l));
+  const skipped = Boolean(skipLine);
+  return { passed, total, fails, recChanged, recTotal, skipped, skipReason: skipLine };
 }
 
-function runSuite(script: string, env: Record<string, string>, timeoutMs: number): Promise<{ code: number; out: string }> {
+function runSuite(script: string, target: Target, timeoutMs: number): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
+    const env: Record<string, string | undefined> = { ...process.env, ...target.env, OVERREACH_HARNESS: "1" };
+    for (const k of target.envDelete || []) delete env[k];
     const child = spawn(process.execPath, ["--import", "tsx", script], {
       cwd: process.cwd(),
-      env: { ...process.env, ...env, OVERREACH_HARNESS: "1" },
+      env: env as Record<string, string>,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
@@ -129,9 +170,15 @@ function runSuite(script: string, env: Record<string, string>, timeoutMs: number
 
 // Ping Stage 1 with a prompt that MUST yield non-empty scope (login form). Empty
 // or warning => model unavailable (404 / no key). Cheaper than a full battery.
+// Pings are serialized in main() (Phase 1) because this mutates process.env
+// in-process; the save/restore covers EVERY key in target.env so a target that
+// sets extra vars (e.g. Gemini sets OPENAI_API_KEY/OPENAI_BASE_URL) doesn't leak
+// into the next ping.
 async function ping(target: Target): Promise<{ ok: boolean; reason?: string }> {
-  const prev = { p: process.env.SCOPE_PROVIDER, m: process.env.OVERREACH_MODEL, b: process.env.OLLAMA_BASE_URL };
+  const prev: Record<string, string | undefined> = {};
+  for (const k of Object.keys(target.env)) prev[k] = process.env[k];
   for (const [k, v] of Object.entries(target.env)) process.env[k] = v;
+  for (const k of target.envDelete || []) { prev[k] = process.env[k]; delete process.env[k]; }
   try {
     const r = await withTimeout(extractScope("add a login form to the settings page"), 60000);
     const scope = r.scope;
@@ -141,7 +188,9 @@ async function ping(target: Target): Promise<{ ok: boolean; reason?: string }> {
   } catch (e) {
     return { ok: false, reason: (e as Error).message };
   } finally {
-    restoreEnv(prev);
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
   }
 }
 
@@ -150,11 +199,6 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
     const t = setTimeout(() => reject(new Error("ping timeout")), ms);
     p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
   });
-}
-function restoreEnv(prev: { p?: string; m?: string; b?: string }) {
-  for (const [k, v] of [["SCOPE_PROVIDER", prev.p], ["OVERREACH_MODEL", prev.m], ["OLLAMA_BASE_URL", prev.b]] as const) {
-    if (v === undefined) delete process.env[k]; else process.env[k] = v;
-  }
 }
 
 async function main() {
@@ -169,30 +213,49 @@ async function main() {
 
   const results: { target: Target; available: boolean; reason?: string; suites: SuiteResult[] }[] = [];
 
+  // Phase 1 — sequential pings. ping() mutates process.env in-process, so pings
+  // MUST be serialized to avoid races; they're cheap (~1 call each). The
+  // expensive batteries are parallelized in Phase 2: each suite is an isolated
+  // child process with its env passed explicitly to spawn, so running targets
+  // concurrently is safe (no shared mutable env).
+  console.log("\n  Phase 1: reachability ping per target (sequential)…");
+  const pings: { target: Target; ok: boolean; reason?: string }[] = [];
   for (const target of targets) {
-    process.stdout.write(`\n▶ ${target.label}  [axis: ${target.axis}]  ${target.note} — pinging…`);
+    process.stdout.write(`  ▶ ${target.label.padEnd(26)} `);
     const pingR = await ping(target);
     if (!pingR.ok) {
-      console.log(` UNAVAILABLE (${pingR.reason})`);
-      results.push({ target, available: false, reason: pingR.reason, suites: [] });
-      continue;
+      console.log(`UNAVAILABLE (${(pingR.reason || "").slice(0, 50)})`);
+      pings.push({ target, ok: false, reason: pingR.reason });
+    } else {
+      console.log("available ✓");
+      pings.push({ target, ok: true });
     }
-    console.log(" available ✓");
+  }
 
+  // Phase 2 — run each available target's battery. Targets run in PARALLEL
+  // (suites sequential within a target). Concurrency cap via HARNESS_CONCURRENCY
+  // (default: all available targets at once — lower it, e.g. 2, if a provider
+  // rate-limits). Each target's suite output is buffered and printed as a block
+  // when that target finishes, so parallel logs don't interleave.
+  const available = pings.filter((p) => p.ok).map((p) => p.target);
+  const cap = Math.max(1, parseInt(process.env.HARNESS_CONCURRENCY || String(available.length), 10));
+  console.log(`\n  Phase 2: batteries in parallel (concurrency ${Math.min(cap, available.length)} of ${available.length} available)…`);
+
+  async function runBattery(target: Target): Promise<{ target: Target; suites: SuiteResult[]; log: string }> {
+    const log: string[] = [];
     const suiteResults: SuiteResult[] = [];
     for (const s of SUITES) {
-      process.stdout.write(`   ${s.name.padEnd(13)} `);
-      const { code, out } = await runSuite(s.script, target.env, s.slow ? 420000 : 240000);
+      const { out } = await runSuite(s.script, target, s.slow ? 420000 : 240000);
       const parsed = parseSuite(out);
       if (parsed.skipped && parsed.total === undefined) {
-        console.log("SKIP");
-        suiteResults.push({ suite: s.name, status: "skip", failingCases: [] });
+        log.push(`   ${s.name.padEnd(13)} SKIP  ${parsed.skipReason ? "— " + parsed.skipReason.slice(0, 60) : ""}`);
+        suiteResults.push({ suite: s.name, status: "skip", failingCases: [], skipReason: parsed.skipReason });
       } else if (parsed.total === undefined) {
-        console.log("ERROR (no summary)");
+        log.push(`   ${s.name.padEnd(13)} ERROR (no summary)`);
         suiteResults.push({ suite: s.name, status: "error", failingCases: parsed.fails, raw: out.slice(-400) });
       } else {
         const ok = parsed.passed === parsed.total;
-        console.log(`${parsed.passed}/${parsed.total}${ok ? "" : " ✗"}`);
+        log.push(`   ${s.name.padEnd(13)} ${parsed.passed}/${parsed.total}${ok ? "" : " ✗"}`);
         suiteResults.push({
           suite: s.name,
           status: ok ? "pass" : "fail",
@@ -204,7 +267,30 @@ async function main() {
         });
       }
     }
-    results.push({ target, available: true, suites: suiteResults });
+    return { target, suites: suiteResults, log: log.join("\n") };
+  }
+
+  const queue = [...available];
+  const batteryResults: { target: Target; suites: SuiteResult[]; log: string }[] = [];
+  async function worker() {
+    while (queue.length) {
+      const target = queue.shift();
+      if (!target) break;
+      const res = await runBattery(target);
+      batteryResults.push(res);
+      console.log(`\n▶ ${res.target.label}  [axis: ${res.target.axis}]  ${res.target.note}`);
+      console.log(res.log);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(cap, available.length) }, () => worker()));
+
+  // assemble results in original target order
+  for (const p of pings) {
+    if (!p.ok) results.push({ target: p.target, available: false, reason: p.reason, suites: [] });
+    else {
+      const br = batteryResults.find((b) => b.target.label === p.target.label);
+      results.push({ target: p.target, available: true, suites: br?.suites ?? [] });
+    }
   }
 
   // ── matrix ───────────────────────────────────────────────────────────────
@@ -219,7 +305,7 @@ async function main() {
   let anyBelow = false;
   for (const r of results) {
     if (!r.available) {
-      console.log(`${r.target.label.padEnd(28)}${"UNAVAILABLE".padStart(13)}  ${r.reason ? r.reason.slice(0, 40) : ""}`);
+      console.log(`${r.target.label.padEnd(28)}${"UNAVAILABLE".padStart(13)}  ${r.reason ? r.reason.slice(0, 44) : ""}`);
       continue;
     }
     let totalPassed = 0, totalTotal = 0, recC = 0, recT = 0;
@@ -234,12 +320,12 @@ async function main() {
         if (sr.reconcileTotal) { recC += sr.reconcileChanged || 0; recT += sr.reconcileTotal; }
       }
     }
-    const overall = totalTotal ? `${totalPassed}/${totalTotal}` : "—";
-    const rate = totalTotal ? totalPassed / totalTotal : 1;
+    const overall = totalTotal ? `${totalPassed}/${totalTotal}` : "0/0 (not measured)";
+    const rate = totalTotal ? totalPassed / totalTotal : null; // null = not measured (NOT 100%)
     const rec = recT ? `${recC}/${recT}` : "—";
-    const flag = rate < threshold ? "  ✗ BELOW" : "";
-    if (rate < threshold) anyBelow = true;
-    console.log(`${r.target.label.padEnd(28)}${cells.join("")}   ${overall.padStart(9)}   ${rec.padStart(10)}${flag}`);
+    const flag = rate === null ? "  · NOT MEASURED" : rate < threshold ? "  ✗ BELOW" : "";
+    if (rate !== null && rate < threshold) anyBelow = true;
+    console.log(`${r.target.label.padEnd(28)}${cells.join("")}   ${overall.padStart(16)}   ${rec.padStart(10)}${flag}`);
   }
 
   // ── failing cases per target ─────────────────────────────────────────────
@@ -291,47 +377,60 @@ async function main() {
   // ── recommendation + verdict (measurement, not fix-until-green) ───────────
   console.log("\n" + "═".repeat(78));
   const avail = results.filter((r) => r.available);
+  // A target is "measured" only if it was available AND at least one suite
+  // produced assertions (total > 0). A target that pinged available but then
+  // self-skipped every suite (its model 404s / can't produce strict scope JSON
+  // on real prompts) is NOT measured — reporting 0/0 as "100% supported" would
+  // be the exact kind of false claim this tool exists to prevent.
   const rates = avail.map((r) => {
     const t = r.suites.reduce((a, s) => a + (s.total || 0), 0);
     const p = r.suites.reduce((a, s) => a + (s.passed || 0), 0);
-    return { label: r.target.label, rate: t ? p / t : 1, p, t, axis: r.target.axis };
-  }).sort((a, b) => b.rate - a.rate);
-  const best = rates[0];
+    const skipReasons = [...new Set(r.suites.map((s) => s.skipReason).filter(Boolean))] as string[];
+    return { label: r.target.label, axis: r.target.axis, rate: t > 0 ? p / t : null as number | null, p, t, skipReasons };
+  });
+  const measuredRates = rates.filter((r) => r.rate !== null).sort((a, b) => (b.rate as number) - (a.rate as number));
+  const notMeasured = rates.filter((r) => r.rate === null);
+  const best = measuredRates[0];
 
   // ── persist artifacts (the matrix IS the deliverable → README "tested models") ─
   const generatedAt = new Date().toISOString();
-  const perSuite: Record<string, { label: string; suites: Record<string, { passed?: number; total?: number; status: string }> ; overall: { p: number; t: number; rate: number } }> = {};
-  for (const r of avail) {
-    const t = r.suites.reduce((a, s) => a + (s.total || 0), 0);
-    const p = r.suites.reduce((a, s) => a + (s.passed || 0), 0);
-    perSuite[r.target.label] = {
-      label: r.target.label,
-      suites: Object.fromEntries(r.suites.map((s) => [s.suite, { passed: s.passed, total: s.total, status: s.status }])),
-      overall: { p, t, rate: t ? p / t : 1 },
-    };
-  }
   writeFileSync("overreach-model-results.json", JSON.stringify({ generatedAt, threshold, targets: results.map((r) => ({ label: r.target.label, axis: r.target.axis, available: r.available, reason: r.reason, suites: r.suites })), rates }, null, 2));
 
   const md: string[] = [];
   md.push("# Tested Models");
   md.push("");
-  md.push(`Generated by \`npm run harness\` on ${generatedAt}. Per-target overall pass rate across the model-dependent battery${process.env.HARNESS_INCLUDE_STRESS ? " (e2e, simulate, large, false-denial, stress)" : " (e2e, simulate, large, false-denial)"}. A target is **supported** at ≥ ${Math.round(threshold * 100)}% overall.`);
+  md.push(`Generated by \`npm run harness\` on ${generatedAt}. Per-target overall pass rate across the model-dependent battery${process.env.HARNESS_INCLUDE_STRESS ? " (e2e, simulate, large, false-denial, stress)" : " (e2e, simulate, large, false-denial)"}. A target is **supported** at ≥ ${Math.round(threshold * 100)}% overall — but only targets that actually RAN the battery count. A target that could not be reached (model 404 / no key / can't produce strict scope JSON) is **not measured**, not "100%".`);
   md.push("");
   md.push("This is a MEASUREMENT, not a 100%-green claim. Weaker models are documented here as best-effort, not chased by overfitting the pipeline.");
   md.push("");
   md.push("| Model | overall | rate | status |");
   md.push("|---|---|---|---|");
-  for (const r of rates) {
-    const pct = Math.round(r.rate * 100);
-    const status = r === best ? "recommended" : r.rate >= threshold ? "supported" : "best-effort";
+  for (const r of measuredRates) {
+    const pct = Math.round((r.rate as number) * 100);
+    const status = r === best ? "recommended" : (r.rate as number) >= threshold ? "supported" : "best-effort";
     md.push(`| ${r.label} | ${r.p}/${r.t} | ${pct}% | ${status} |`);
   }
+  for (const r of notMeasured) {
+    const reason = r.skipReasons[0] ? ` — ${r.skipReasons[0].replace(/^SKIP:\s*/i, "").slice(0, 80)}` : "";
+    md.push(`| ${r.label} | 0/0 | — | not measured${reason} |`);
+  }
+  for (const r of results.filter((x) => !x.available)) {
+    md.push(`| ${r.target.label} | — | — | unavailable — ${(r.reason || "").slice(0, 80)} |`);
+  }
   md.push("");
-  md.push(`**Recommended:** ${best?.label}.`);
-  const supported = rates.filter((r) => r !== best && r.rate >= threshold).map((r) => r.label);
-  const bestEffort = rates.filter((r) => r.rate < threshold).map((r) => r.label);
-  if (supported.length) md.push(`**Also supported:** ${supported.join(", ")}.`);
-  if (bestEffort.length) md.push(`**Best-effort (below ${Math.round(threshold * 100)}%):** ${bestEffort.join(", ")}.`);
+  if (best) {
+    md.push(`**Recommended:** ${best.label} (${best.p}/${best.t}, ${Math.round((best.rate as number) * 100)}%).`);
+    const supported = measuredRates.filter((r) => r !== best && (r.rate as number) >= threshold).map((r) => r.label);
+    const bestEffort = measuredRates.filter((r) => (r.rate as number) < threshold).map((r) => r.label);
+    if (supported.length) md.push(`**Also supported:** ${supported.join(", ")}.`);
+    if (bestEffort.length) md.push(`**Best-effort (below ${Math.round(threshold * 100)}%):** ${bestEffort.join(", ")}.`);
+  } else {
+    md.push(`**Recommended:** none — no target could be measured. Check keys / model names / OLLAMA_BASE_URL.`);
+  }
+  if (notMeasured.length) {
+    md.push("");
+    md.push(`**Not measured (could not run the battery):** ${notMeasured.map((r) => r.label).join(", ")}. These pinged reachable but their model could not produce strict scope JSON on the suite probe — document, do NOT overfit the pipeline to make them pass.`);
+  }
   const withFails2 = avail.filter((r) => r.suites.some((s) => s.failingCases.length > 0));
   if (withFails2.length) {
     md.push("");
@@ -343,30 +442,35 @@ async function main() {
   }
   writeFileSync("TESTED-MODELS.md", md.join("\n") + "\n");
 
-  if (avail.length === 0) {
-    console.log("  VERDICT: measurement FAILED — no targets available. Check keys / model names / OLLAMA_BASE_URL.");
+  if (measuredRates.length === 0) {
+    console.log("  VERDICT: measurement FAILED — no target could be measured. Check keys / model names / OLLAMA_BASE_URL.");
     console.log("═".repeat(78) + "\n");
     process.exit(1);
   }
   console.log("  RECOMMENDATION TABLE (primary output — also written to TESTED-MODELS.md + overreach-model-results.json):");
-  for (const r of rates) {
-    const pct = Math.round(r.rate * 100);
-    const tag = r === best ? "  ← recommended" : (r.rate >= threshold ? "  ← supported" : "  ← best-effort");
+  for (const r of measuredRates) {
+    const pct = Math.round((r.rate as number) * 100);
+    const tag = r === best ? "  ← recommended" : ((r.rate as number) >= threshold ? "  ← supported" : "  ← best-effort");
     console.log(`    ${r.label.padEnd(28)} ${r.p}/${r.t}  (${pct}%)${tag}`);
   }
+  for (const r of notMeasured) console.log(`    ${r.label.padEnd(28)} 0/0     (n/a)  ← not measured${r.skipReasons[0] ? " — " + r.skipReasons[0].replace(/^SKIP:\s*/i, "").slice(0, 50) : ""}`);
   console.log("");
   if (anyBelow) {
-    console.log(`  ⚠  ${rates.filter((r) => r.rate < threshold).length} target(s) below ${Math.round(threshold * 100)}% → exit 1 (worth investigating).`);
+    console.log(`  ⚠  ${measuredRates.filter((r) => (r.rate as number) < threshold).length} measured target(s) below ${Math.round(threshold * 100)}% → exit 1 (worth investigating).`);
     console.log("     Investigate via the SHARED FRAGILITY list: same case fails on many models = real fix;");
     console.log("     fails on one model = that model's quirk → document in README, do NOT overfit the pipeline to chase 100%.");
   } else {
-    console.log(`  ✓ Every available target ≥ ${Math.round(threshold * 100)}%. The frozen contract is model-robust, not ${best?.label}-specific.`);
+    console.log(`  ✓ Every MEASURED target ≥ ${Math.round(threshold * 100)}%. (${measuredRates.length} measured, ${notMeasured.length} not measured, ${results.filter((x) => !x.available).length} unavailable.)`);
+    if (notMeasured.length) console.log("     Note: model-robustness is proven only across the MEASURED models. Not-measured models couldn't run — provision them (ollama pull / cloud account) to extend the claim; do NOT chase them by overfitting.");
   }
   console.log("\n  Artifacts: TESTED-MODELS.md (README-ready) · overreach-model-results.json (raw)");
   console.log("═".repeat(78) + "\n");
-  // Exit policy: 0 = every available model ≥ threshold (measurement OK, nothing to investigate).
-  //              1 = some model below threshold (worth investigating) OR measurement failed.
-  // The matrix is the deliverable; the exit code is just an investigate-flag, not a fix-until-green gate.
+  // Exit policy: 0 = every MEASURED model ≥ threshold AND at least one was measured.
+  //              1 = some measured model below threshold (worth investigating) OR
+  //                  nothing could be measured at all.
+  // Not-measured / unavailable targets are NOT "below threshold" — they're absent
+  // data, documented in the matrix, not chased. The matrix is the deliverable; the
+  // exit code is just an investigate-flag, not a fix-until-green gate.
   process.exit(anyBelow ? 1 : 0);
 }
 

@@ -6,7 +6,8 @@
 
 import { readFileSync } from "node:fs";
 import { checkOverreach } from "../src/tools/check_overreach.js";
-import { extractScope, hasKey } from "../src/scope/extract_scope.js";
+import { hasKey } from "../src/scope/extract_scope.js";
+import { probeReachable } from "./lib/probe.js";
 import { resolveProvider, resolveModel } from "../src/config.js";
 import { parseDiff } from "../src/parsers/diff.js";
 
@@ -205,8 +206,8 @@ async function main() {
   if ((!process.env.OVERREACH_HARNESS && provider !== "ollama") || !hasKey()) {
     console.log("SKIP: needs SCOPE_PROVIDER=ollama + OLLAMA creds."); process.exit(0);
   }
-  const probe = await extractScope("add a hello function");
-  if (probe.warning && /failed|parse/i.test(probe.warning)) { console.log(`SKIP: cloud unreachable: ${probe.warning}`); process.exit(0); }
+  const pre = await probeReachable("add a hello function");
+  if (!pre.ok) { console.log(`SKIP: cloud unreachable: ${pre.warning}`); process.exit(0); }
   console.log(`Large-change simulation â€” model: ${model} @ ${process.env.OLLAMA_BASE_URL}`);
 
   // Pure-parser latency check (no LLM) on the biggest diff.

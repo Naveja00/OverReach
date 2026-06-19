@@ -13,10 +13,10 @@
 
 import type { Scope, ReconcileTelemetry } from "../types.js";
 import {
-  ANTHROPIC_API_KEY,
-  OPENAI_API_KEY,
-  OLLAMA_API_KEY,
-  OLLAMA_BASE_URL,
+  anthropicKey,
+  openaiKey,
+  ollamaKey,
+  ollamaBaseUrl,
   resolveProvider,
   resolveModel,
 } from "../config.js";
@@ -71,8 +71,8 @@ function looksReal(key: string): boolean {
 export function hasKey(): boolean {
   const provider = resolveProvider();
   if (provider === "ollama") return true;
-  if (provider === "anthropic") return looksReal(ANTHROPIC_API_KEY);
-  if (provider === "openai") return looksReal(OPENAI_API_KEY);
+  if (provider === "anthropic") return looksReal(anthropicKey());
+  if (provider === "openai") return looksReal(openaiKey());
   return false;
 }
 
@@ -163,16 +163,32 @@ async function reconcileScope(model: string, provider: string, merged: Scope, fu
 }
 
 // ── provider dispatch ──────────────────────────────────────────────────────
+// Optional per-call throttle (env-gated). Set OVERREACH_CALL_MIN_INTERVAL_MS to
+// space out LLM calls — e.g. Gemini free tier is 5 req/min, so 13000ms keeps you
+// under quota across a whole battery (including map-reduce sub-calls + reconcile).
+// Default 0 = no throttling. Applies to every chat() call regardless of provider.
+let _lastChatAt = 0;
+async function _throttle(): Promise<void> {
+  const min = parseInt(process.env.OVERREACH_CALL_MIN_INTERVAL_MS || "0", 10);
+  if (min > 0) {
+    const wait = min - (Date.now() - _lastChatAt);
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  }
+  _lastChatAt = Date.now();
+}
+
 async function chat(model: string, provider: string, system: string, user: string): Promise<string> {
+  await _throttle();
   if (provider === "ollama") return chatOllama(model, system, user);
   if (provider === "openai") return chatOpenAI(model, system, user);
   return chatAnthropic(model, system, user);
 }
 
 async function chatAnthropic(model: string, system: string, user: string): Promise<string> {
-  if (!looksReal(ANTHROPIC_API_KEY)) throw new Error("ANTHROPIC_API_KEY not set");
+  const key = anthropicKey();
+  if (!looksReal(key)) throw new Error("ANTHROPIC_API_KEY not set");
   const { Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+  const client = new Anthropic({ apiKey: key });
   const resp = await client.messages.create({
     model,
     max_tokens: 1200,
@@ -184,11 +200,12 @@ async function chatAnthropic(model: string, system: string, user: string): Promi
 }
 
 async function chatOpenAI(model: string, system: string, user: string): Promise<string> {
-  if (!looksReal(OPENAI_API_KEY)) throw new Error("OPENAI_API_KEY not set");
+  const key = openaiKey();
+  if (!looksReal(key)) throw new Error("OPENAI_API_KEY not set");
   const base = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
   const resp = await fetch(`${base}/chat/completions`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${OPENAI_API_KEY}` },
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model,
       temperature: 0,
@@ -203,9 +220,10 @@ async function chatOpenAI(model: string, system: string, user: string): Promise<
 }
 
 async function chatOllama(model: string, system: string, user: string): Promise<string> {
+  const key = ollamaKey();
   const headers: Record<string, string> = { "content-type": "application/json" };
-  if (looksReal(OLLAMA_API_KEY)) headers.authorization = `Bearer ${OLLAMA_API_KEY}`;
-  const resp = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+  if (looksReal(key)) headers.authorization = `Bearer ${key}`;
+  const resp = await fetch(`${ollamaBaseUrl()}/api/chat`, {
     method: "POST",
     headers,
     body: JSON.stringify({

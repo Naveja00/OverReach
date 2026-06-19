@@ -11,7 +11,8 @@
 
 import { readFileSync } from "node:fs";
 import { checkOverreach } from "../src/tools/check_overreach.js";
-import { extractScope, hasKey } from "../src/scope/extract_scope.js";
+import { hasKey } from "../src/scope/extract_scope.js";
+import { probeReachable } from "./lib/probe.js";
 import { resolveProvider, resolveModel } from "../src/config.js";
 
 let failures = 0;
@@ -47,12 +48,13 @@ async function main() {
 
   // Pre-flight: confirm the cloud is actually reachable + the model responds.
   console.log(`\nProvider: ${provider} | Model: ${model} | Base: ${process.env.OLLAMA_BASE_URL}`);
-  console.log("Pre-flight: extracting scope from a tiny probe prompt...");
-  const probe = await extractScope("add a hello world function");
-  if (probe.warning && /failed|parse/i.test(probe.warning)) {
-    console.log(`\nSKIP: Ollama Cloud unreachable or model error:\n  ${probe.warning}`);
+  console.log("Pre-flight: extracting scope from a tiny probe prompt (with retry)...");
+  const pre = await probeReachable("add a hello world function");
+  if (!pre.ok) {
+    console.log(`\nSKIP: Ollama Cloud unreachable or model error:\n  ${pre.warning}`);
     process.exit(0);
   }
+  const probe = { scope: pre.scope! };
   console.log(`  probe scope: ${JSON.stringify(probe.scope)}`);
   ok("cloud model returned a parseable scope", probe.scope.features_allowed.length > 0 || probe.scope.files_allowed.length > 0, JSON.stringify(probe.scope));
 

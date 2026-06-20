@@ -24,6 +24,7 @@ export async function checkOverreach(
   let warning: string | undefined;
   let telemetry = undefined;
   let skipped = false;
+  let deterministic = false;
 
   if (options.scopeOverride) {
     scope = options.scopeOverride; // tests / demo: zero LLM, fully deterministic
@@ -32,10 +33,10 @@ export async function checkOverreach(
     scope = extracted.scope;
     warning = extracted.warning;
     telemetry = extracted.telemetry;
+    deterministic = !!(extracted as { deterministic?: boolean }).deterministic;
     // A real outage (key configured but extraction failed) => SKIP the audit
     // (findings=[], LOW) so a CI gate doesn't block PRs on a provider outage.
-    // A no-key run that fell back to unreachable local Ollama is NOT skipped —
-    // it stays in paranoid mode (flag everything), the documented tripwire.
+    // A no-key deterministic fallback is NOT skipped — it uses regex extraction.
     if (extracted.extractionFailed && extracted.keyConfigured) skipped = true;
   }
 
@@ -60,6 +61,7 @@ export async function checkOverreach(
     summary,
   };
   if (skipped) result.skipped = true;
+  if (deterministic) result.deterministic = true;
   if (telemetry) result.telemetry = telemetry;
 
   // Execution contract (optional). Promotes the scope to a versioned

@@ -173,7 +173,7 @@ async function main() {
   }
 
   // â”€â”€ [9] graceful Stage 1: configured provider unusable â†’ empty scope + warning, never throws
-  console.log("\n[9] Stage 1 graceful path (forced anthropic provider with no key â†’ empty scope + warning, never throws)");
+  console.log("\n[9] Stage 1 graceful path (forced anthropic provider with no key â†’ deterministic fallback, never throws)");
   {
     const savedKey = process.env.ANTHROPIC_API_KEY;
     const savedProvider = process.env.SCOPE_PROVIDER;
@@ -181,14 +181,14 @@ async function main() {
     process.env.SCOPE_PROVIDER = "anthropic"; // force a provider whose key is absent
     const { extractScope } = await import("../src/scope/extract_scope.js");
     let threw = false;
-    let out: { scope?: unknown; warning?: string } = {};
+    let out: { scope?: unknown; warning?: string; deterministic?: boolean } = {};
     try {
       out = await extractScope("add a login form");
     } catch {
       threw = true;
     }
     ok("does not throw when the configured provider is unusable", !threw);
-    ok("returns a warning explaining the failure", typeof out.warning === "string" && out.warning.length > 0, `warning: ${out.warning}`);
+    ok("falls back to deterministic extraction", (out as any).deterministic === true, `deterministic: ${(out as any).deterministic}`);
     if (savedKey) process.env.ANTHROPIC_API_KEY = savedKey;
     if (savedProvider === undefined) delete process.env.SCOPE_PROVIDER;
     else process.env.SCOPE_PROVIDER = savedProvider;

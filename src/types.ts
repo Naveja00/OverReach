@@ -96,6 +96,7 @@ export interface CheckResult {
   // on a provider outage. A no-key run that falls back to an unreachable local
   // Ollama is NOT skipped — it stays in paranoid mode (flag everything).
   skipped?: boolean;
+  deterministic?: boolean;
   telemetry?: ReconcileTelemetry;
   contract?: ExecutionContract;
   contractNarrowing?: NarrowingResult;

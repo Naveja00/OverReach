@@ -21,6 +21,7 @@ import {
   resolveModel,
   type Provider,
 } from "../config.js";
+import { extractDeterministic } from "./extract_deterministic.js";
 
 const EMPTY_SCOPE: Scope = {
   files_allowed: [],
@@ -103,13 +104,13 @@ export async function extractScope(prompt: string): Promise<{ scope: Scope; warn
       const results = await Promise.all(chunks.map((c) => extractOne(model, provider, c)));
       const parsed = results.map((t) => parseScopeJson(t)).filter(Boolean) as Scope[];
       if (parsed.length === 0) {
-        if (attempt === 2) return { ...emptyWithWarning(`Could not parse scope JSON from ${provider}/${model}.`), extractionFailed: true, keyConfigured };
+        if (attempt === 2) return deterministicFallback(prompt, keyConfigured, `Could not parse scope JSON from ${provider}/${model}.`);
         continue;
       }
       sectionScopes.push(...parsed);
       break;
     } catch (err) {
-      if (attempt === 2) return { ...emptyWithWarning(`Scope extraction failed after retries (${provider}/${model}): ${(err as Error).message}`), extractionFailed: true, keyConfigured };
+      if (attempt === 2) return deterministicFallback(prompt, keyConfigured, `Scope extraction failed after retries (${provider}/${model}): ${(err as Error).message}`);
     }
   }
 
@@ -152,6 +153,31 @@ function diffScopes(merged: Scope, reconciled: Scope): { added: string[]; remove
 
 function emptyWithWarning(warning: string): { scope: Scope; warning: string } {
   return { scope: { ...EMPTY_SCOPE }, warning };
+}
+
+// When the LLM is unreachable, fall back to deterministic regex extraction
+// instead of returning an empty scope (paranoid mode). If a key WAS configured
+// (a real outage), we still mark extractionFailed so check_overreach can SKIP
+// rather than block on stale results. If no key was configured, deterministic
+// mode is the real extraction — not a fallback, THE extractor.
+function deterministicFallback(
+  prompt: string,
+  keyConfigured: boolean,
+  reason: string,
+): { scope: Scope; warning?: string; extractionFailed?: boolean; keyConfigured?: boolean; deterministic?: boolean } {
+  const scope = extractDeterministic(prompt);
+  const hasContent = Object.values(scope).some(arr => arr.length > 0);
+  if (keyConfigured) {
+    // Real key but provider is down — mark as failed so CI gate can skip.
+    // Still provide the deterministic scope as a best-effort.
+    return { scope, warning: `${reason} Fell back to deterministic extraction.`, extractionFailed: true, keyConfigured, deterministic: true };
+  }
+  // No key configured — deterministic mode is the primary extractor.
+  return {
+    scope,
+    warning: hasContent ? undefined : "No API key configured. Deterministic extraction found no concrete items in the prompt — results may over-flag.",
+    deterministic: true,
+  };
 }
 
 // Extract scope from a single (possibly sectioned) prompt string.

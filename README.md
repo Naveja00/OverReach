@@ -83,9 +83,14 @@ provider you already use:
 | Ollama (Cloud or self-hosted) | `OLLAMA_API_KEY` + `OLLAMA_BASE_URL` |
 
 Pin a provider/model with `SCOPE_PROVIDER` and `OVERREACH_MODEL`. Set the key in
-the environment where your agent runs. Without a key, Overreach still runs but
-Stage 1 returns an empty scope with a warning, so everything in the diff is
-treated as potentially unauthorized — useful as a paranoid tripwire.
+the environment where your agent runs.
+
+**No key? No problem.** Without an API key, Overreach falls back to
+**deterministic scope extraction** — it regex-parses your prompt for concrete
+items (file paths, package names, `/api/...` routes, `SCREAMING_SNAKE_CASE` env
+vars, cron keywords) instead of calling an LLM. It won't understand vague
+instructions as well as an LLM would, but it catches every concrete noun in
+your prompt and is instant, free, and fully offline.
 
 ## Use it
 

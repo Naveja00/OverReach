@@ -142,11 +142,12 @@ const SCORE_COLOR: Record<string, (s: string) => string> = {
   HIGH: ANSI.red, MEDIUM: ANSI.yellow, LOW: ANSI.green,
 };
 
-function pretty(result: CheckResult, meta: { source: string; cached: boolean; promptLen: number; diffLines: number }): string {
+function pretty(result: CheckResult, meta: { source: string; cached: boolean; deterministic: boolean; promptLen: number; diffLines: number }): string {
   const L: string[] = [];
   L.push(c(ANSI.bold)("Overreach — scope audit"));
   L.push(c(ANSI.dim)(`  ${meta.source}`));
   if (meta.cached) L.push(c(ANSI.dim)("  stage 1: served from scope cache (no LLM call)"));
+  if (meta.deterministic) L.push(c(ANSI.cyan)("  stage 1: deterministic extraction (no API key — regex-parsed prompt, no LLM)"));
   L.push("");
 
   const score = result.scope_creep_score;
@@ -200,7 +201,7 @@ async function main() {
   // ── demo ─────────────────────────────────────────────────────────────────
   if (args.demo) {
     const result = await checkOverreach(DEMO_PROMPT, DEMO_DIFF, { scopeOverride: DEMO_SCOPE });
-    const meta = { source: "demo: canonical login-form-smuggles-Stripe fixture (scope injected, no LLM call, zero key)", cached: false, promptLen: sizeOfPrompt(DEMO_PROMPT), diffLines: sizeOfDiff(DEMO_DIFF) };
+    const meta = { source: "demo: canonical login-form-smuggles-Stripe fixture (scope injected, no LLM call, zero key)", cached: false, deterministic: false, promptLen: sizeOfPrompt(DEMO_PROMPT), diffLines: sizeOfDiff(DEMO_DIFF) };
     if (args.json) {
       console.log(JSON.stringify({ ...result, telemetry: result.telemetry ? { reconcileRan: result.telemetry.reconcileRan, reconcileChanged: result.telemetry.reconcileChanged } : undefined }, null, 2));
     } else {
@@ -242,11 +243,11 @@ async function main() {
   // so the next run of the same prompt is free. Never cache a skipped/failed
   // extraction — that would persist an empty scope and poison later runs with
   // paranoid-mode false positives even after the provider recovers.
-  if (!scopeOverride && !args.noCache && !result.skipped) {
+  if (!scopeOverride && !args.noCache && !result.skipped && !result.deterministic) {
     putScopeCache(prompt, provider, model, result.scope);
   }
 
-  const meta = { source, cached, promptLen: sizeOfPrompt(prompt), diffLines: sizeOfDiff(diff) };
+  const meta = { source, cached, deterministic: !!result.deterministic, promptLen: sizeOfPrompt(prompt), diffLines: sizeOfDiff(diff) };
 
   if (args.json) {
     // JSON mode: emit the full result + a telemetry-safe event alongside it.

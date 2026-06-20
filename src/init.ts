@@ -1,10 +1,9 @@
-// overreach init — install a git pre-commit hook that audits staged changes.
+// overreach init — full project setup for scope-creep detection.
 //
 // What it does:
-//   1. Creates .overreach/prompt.md if it doesn't exist (the user fills in their
-//      authorized scope; the hook reads it at commit time).
-//   2. Writes .git/hooks/pre-commit (or appends to an existing one) that runs
-//      `npx -y -p overreach overreach-cli` on `git diff --cached`.
+//   1. Creates .overreach/prompt.md (the user fills in their authorized scope)
+//   2. Writes .git/hooks/pre-commit that runs overreach on staged changes
+//   3. Appends a CLAUDE.md instruction so AI agents self-audit before committing
 //
 // The hook blocks the commit when scope_creep_score=HIGH (exit 1). LOW/MEDIUM
 // pass through. Use `git commit --no-verify` to skip (escape hatch, not recommended).
@@ -96,6 +95,7 @@ export function runInit(): void {
 
   let createdPrompt = false;
   let installedHook = false;
+  let createdClaudeMd = false;
 
   // 1. Create .overreach/prompt.md
   if (!existsSync(overreachDir)) mkdirSync(overreachDir, { recursive: true });
@@ -130,8 +130,38 @@ export function runInit(): void {
     installedHook = true;
   }
 
+  // 3. Append to CLAUDE.md so AI agents self-audit
+  const claudeMdFile = join(gitRoot, "CLAUDE.md");
+  const CLAUDE_MARKER = "<!-- overreach -->";
+  const CLAUDE_BLOCK = `
+${CLAUDE_MARKER}
+## Scope audit
+
+Before committing, audit your staged changes against the task prompt:
+
+\`\`\`
+git diff --staged | npx -y -p overreach overreach-cli --prompt "<the task you were given>"
+\`\`\`
+
+If \`scope_creep_score\` is HIGH, remove the unauthorized changes before committing.
+Do not add dependencies, env vars, endpoints, or cron jobs the prompt did not ask for.
+${CLAUDE_MARKER}
+`;
+
+  if (existsSync(claudeMdFile)) {
+    const existing = readFileSync(claudeMdFile, "utf-8");
+    if (!existing.includes(CLAUDE_MARKER)) {
+      const content = existing.endsWith("\n") ? existing : existing + "\n";
+      writeFileSync(claudeMdFile, content + CLAUDE_BLOCK, "utf-8");
+      createdClaudeMd = true;
+    }
+  } else {
+    writeFileSync(claudeMdFile, CLAUDE_BLOCK.trimStart(), "utf-8");
+    createdClaudeMd = true;
+  }
+
   // Summary
-  console.log(c(ANSI.bold)("Overreach — pre-commit hook installed\n"));
+  console.log(c(ANSI.bold)("Overreach — project setup complete\n"));
 
   if (createdPrompt) {
     console.log(c(ANSI.green)("  ✓ Created .overreach/prompt.md"));
@@ -146,9 +176,17 @@ export function runInit(): void {
     console.log(c(ANSI.dim)("    HIGH scope creep → commit blocked. Skip with --no-verify.\n"));
   }
 
+  if (createdClaudeMd) {
+    console.log(c(ANSI.green)("  ✓ Added scope audit instruction to CLAUDE.md"));
+    console.log(c(ANSI.dim)("    AI agents (Claude Code, Cursor, Codex) will self-audit before committing.\n"));
+  } else {
+    console.log(c(ANSI.dim)("  · CLAUDE.md already has Overreach instruction\n"));
+  }
+
   console.log(c(ANSI.bold)("Next steps:"));
   console.log(`  1. Edit ${c(ANSI.yellow)(".overreach/prompt.md")} with your actual prompt`);
   console.log(`  2. Stage your changes and commit — Overreach runs automatically`);
-  console.log(`  3. Set an API key (ANTHROPIC_API_KEY / OPENAI_API_KEY / OLLAMA_API_KEY)`);
-  console.log(c(ANSI.dim)("     Without a key, paranoid mode flags everything.\n"));
+  console.log(`  3. Optional: set an API key for better scope extraction`);
+  console.log(c(ANSI.dim)("     (ANTHROPIC_API_KEY / OPENAI_API_KEY / OLLAMA_API_KEY)"));
+  console.log(c(ANSI.dim)("     Without a key, deterministic mode extracts concrete items from your prompt.\n"));
 }

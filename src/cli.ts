@@ -20,6 +20,7 @@ import { getScopeCache, putScopeCache } from "./scope/cache.js";
 import { sizeOfPrompt, sizeOfDiff, toTelemetryEvent } from "./sanitize.js";
 import type { Scope, CheckResult } from "./types.js";
 import { DEMO_PROMPT, DEMO_DIFF, DEMO_SCOPE } from "./demo.js";
+import { runInit } from "./init.js";
 
 const ANSI = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
@@ -40,11 +41,12 @@ interface Args {
   emitContract: boolean;
   noCache: boolean;
   demo: boolean;
+  init: boolean;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { json: false, emitContract: false, noCache: false, demo: false, help: false };
+  const a: Args = { json: false, emitContract: false, noCache: false, demo: false, init: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = () => argv[++i];
@@ -57,6 +59,7 @@ function parseArgs(argv: string[]): Args {
       case "--emit-contract": a.emitContract = true; break;
       case "--no-cache": a.noCache = true; break;
       case "demo": a.demo = true; break;
+      case "init": a.init = true; break;
       default:
         if (arg.startsWith("--prompt=")) a.prompt = arg.slice("--prompt=".length);
         else if (arg.startsWith("--diff=")) a.diffPath = arg.slice("--diff=".length);
@@ -74,6 +77,7 @@ Usage:
   overreach --prompt "..." --diff change.diff
   overreach --prompt "..." --scope scope.json     zero-key, no LLM call
   overreach demo                                    self-contained zero-key demo
+  overreach init                                    install pre-commit hook
   overreach --prompt "..." --json                  raw JSON for piping/CI
 
 Options:
@@ -84,6 +88,7 @@ Options:
   --emit-contract       include the versioned execution contract in output
   --no-cache            bypass the scope cache (force a fresh Stage 1 call)
   demo                  run the canonical login-form-smuggles-Stripe demo
+  init                  install a git pre-commit hook + .overreach/prompt.md
 
 Resolution: anthropic key > openai key > ollama (local, keyless). Override with
 SCOPE_PROVIDER. Pin a model with OVERREACH_MODEL. Stage 1 scope is cached by
@@ -188,6 +193,9 @@ function pretty(result: CheckResult, meta: { source: string; cached: boolean; pr
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || process.argv.length <= 2) { console.log(HELP); process.exit(0); }
+
+  // ── init ─────────────────────────────────────────────────────────────────
+  if (args.init) { runInit(); return; }
 
   // ── demo ─────────────────────────────────────────────────────────────────
   if (args.demo) {

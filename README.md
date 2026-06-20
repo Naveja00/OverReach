@@ -185,6 +185,26 @@ Runs two fixtures through the **real** pipeline with the scope injected via
 
 Prints `N passed, M failed`. This is the proof it works without spending money.
 
+## Pre-commit hook
+
+Catch scope creep **before** the commit lands — not at PR time.
+
+```bash
+npx -y -p overreach overreach-cli init
+```
+
+This installs a git pre-commit hook and creates `.overreach/prompt.md`. Edit
+that file with the prompt you gave your AI agent. Every commit is then audited
+against it:
+
+- **HIGH** scope creep → commit blocked (exit 1)
+- **MEDIUM / LOW** → commit allowed with findings printed
+- Template prompt (not yet edited) → skipped gracefully
+- No API key → paranoid mode (flags everything)
+
+Skip with `git commit --no-verify` when you know what you're doing. Update
+`.overreach/prompt.md` whenever you give the agent a new task.
+
 ## CI gate (GitHub Action)
 
 The hard backstop. A workflow runs Overreach on every pull request and **fails

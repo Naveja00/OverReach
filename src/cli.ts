@@ -41,6 +41,8 @@ interface Args {
   parentContractPath?: string;
   agentName?: string;
   expires?: string;
+  taskId?: string;
+  issueRef?: string;
   json: boolean;
   emitContract: boolean;
   noCache: boolean;
@@ -48,11 +50,12 @@ interface Args {
   demo: boolean;
   init: boolean;
   ledger: boolean;
+  status: boolean;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { json: false, emitContract: false, noCache: false, ledgerAppend: false, demo: false, init: false, ledger: false, help: false };
+  const a: Args = { json: false, emitContract: false, noCache: false, ledgerAppend: false, demo: false, init: false, ledger: false, status: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = () => argv[++i];
@@ -69,10 +72,12 @@ function parseArgs(argv: string[]): Args {
       case "--agent-name": a.agentName = next(); break;
       case "--expires": a.expires = next(); break;
       case "--ledger-append": a.ledgerAppend = true; break;
+      case "--task-id": a.taskId = next(); break;
+      case "--issue-ref": a.issueRef = next(); break;
       case "demo": a.demo = true; break;
       case "init": a.init = true; break;
       case "ledger": a.ledger = true; break;
-      case "status": break;
+      case "status": a.status = true; break;
       default:
         if (arg.startsWith("--prompt=")) a.prompt = arg.slice("--prompt=".length);
         else if (arg.startsWith("--prompt-file=")) a.promptFile = arg.slice("--prompt-file=".length);
@@ -81,6 +86,8 @@ function parseArgs(argv: string[]): Args {
         else if (arg.startsWith("--parent-contract=")) a.parentContractPath = arg.slice("--parent-contract=".length);
         else if (arg.startsWith("--agent-name=")) a.agentName = arg.slice("--agent-name=".length);
         else if (arg.startsWith("--expires=")) a.expires = arg.slice("--expires=".length);
+        else if (arg.startsWith("--task-id=")) a.taskId = arg.slice("--task-id=".length);
+        else if (arg.startsWith("--issue-ref=")) a.issueRef = arg.slice("--issue-ref=".length);
         else { console.error(`unknown argument: ${arg}`); process.exit(2); }
     }
   }
@@ -238,7 +245,7 @@ async function main() {
   }
 
   // ── status ─────────────────────────────────────────────────────────────
-  if (process.argv[2] === "status") {
+  if (args.status) {
     const { readLedger, formatLedgerForAgent } = await import("./ledger.js");
     const { readClaims, formatClaims } = await import("./claims.js");
     const { execSync } = await import("node:child_process");
@@ -338,8 +345,13 @@ async function main() {
       const root = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
       const agent = args.agentName || "pre-commit";
       const task = prompt.length > 100 ? prompt.slice(0, 100) + "..." : prompt;
-      appendLedger(root, result, agent, task);
-    } catch {}
+      appendLedger(root, result, agent, task, {
+        taskId: args.taskId,
+        issueRef: args.issueRef,
+      });
+    } catch (err) {
+      console.error(`[overreach] ledger append failed: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   process.exit(result.scope_creep_score === "HIGH" ? 1 : 0);

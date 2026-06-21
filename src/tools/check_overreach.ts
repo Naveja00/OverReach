@@ -14,16 +14,7 @@ import { extractScope } from "../scope/extract_scope.js";
 import { resolveProvider, resolveModel } from "../config.js";
 import { buildContract } from "../contract/schema.js";
 import { isNarrower } from "../contract/narrow.js";
-
-function resolveExpiry(input: string): string {
-  const dur = input.match(/^(\d+)(m|h|d)$/);
-  if (dur) {
-    const [, n, unit] = dur;
-    const ms = { m: 60_000, h: 3_600_000, d: 86_400_000 }[unit]!;
-    return new Date(Date.now() + parseInt(n) * ms).toISOString();
-  }
-  return input; // assume ISO timestamp
-}
+import { resolveExpiry } from "../utils.js";
 
 export async function checkOverreach(
   prompt: string,
@@ -89,6 +80,7 @@ export async function checkOverreach(
       reconcileChanged: telemetry?.reconcileChanged ?? false,
       findingsAtIssue: findings.length,
       parentContract: options.parentContract,
+      parentScore: score,
       agentName: options.agentName,
       expiresAt: options.expiresAt ? resolveExpiry(options.expiresAt) : undefined,
     });

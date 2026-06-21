@@ -280,11 +280,12 @@ items — no model needed.
 npm test
 ```
 
-Runs 87 assertions through the real pipeline with the scope injected via
+Runs 100 assertions through the real pipeline with the scope injected via
 `scopeOverride`, so Stage 1 (the LLM) is never called. Covers overreach
 detection, clean passes, Python/Express/Next.js parsers, deletion handling,
 determinism, chunking, trust contract invariant, agent-to-agent handoffs,
-contract narrowing/expiration, file claims, and ledger queries.
+contract narrowing/expiration, file claims, ledger queries, claim extension,
+conflict detection with recent touches, and issue traceability.
 
 ## Standalone
 

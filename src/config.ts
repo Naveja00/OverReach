@@ -27,7 +27,7 @@ export const PORT = parseInt(process.env.PORT || "0", 10);
 // OVERREACH_HOST=0.0.0.0 only behind an authed reverse proxy.
 export const HOST = process.env.OVERREACH_HOST || "127.0.0.1";
 
-function looksReal(key: string): boolean {
+export function looksReal(key: string): boolean {
   return Boolean(key && !key.includes("your_") && key.length > 8);
 }
 

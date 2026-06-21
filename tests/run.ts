@@ -399,6 +399,83 @@ async function main() {
     ok("ownership map: tests only by codex", ownership["tests/auth.test.ts"]?.length === 1 && ownership["tests/auth.test.ts"][0].agent === "codex");
   }
 
+  // -- [19] utils: resolveExpiry + isExpiredTimestamp ---------------------------
+  console.log("\n[19] utils: resolveExpiry validation + isExpiredTimestamp");
+  {
+    const { resolveExpiry, isExpiredTimestamp } = await import("../src/utils.js");
+    const twoH = resolveExpiry("2h");
+    ok("resolveExpiry('2h') returns valid ISO", /^\d{4}-\d{2}-\d{2}T/.test(twoH));
+    const thirtyM = resolveExpiry("30m");
+    ok("resolveExpiry('30m') is ~30min ahead", new Date(thirtyM).getTime() > Date.now() + 29 * 60_000);
+    const invalid = resolveExpiry("banana");
+    ok("resolveExpiry('banana') defaults to 2h ahead (not 'banana')", invalid !== "banana" && /^\d{4}-\d{2}-\d{2}T/.test(invalid));
+    ok("isExpiredTimestamp with past date is true", isExpiredTimestamp("2020-01-01T00:00:00Z"));
+    ok("isExpiredTimestamp with future date is false", !isExpiredTimestamp(new Date(Date.now() + 60_000).toISOString()));
+    ok("isExpiredTimestamp with garbage is true (treated as expired)", isExpiredTimestamp("banana"));
+  }
+
+  // -- [20] extend_claim --------------------------------------------------------
+  console.log("\n[20] extend_claim: extend existing claims");
+  {
+    const { claimFiles, extendClaim, readClaims } = await import("../src/claims.js");
+    const { mkdirSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const tmpRoot = join(process.cwd(), ".test-extend-tmp");
+    mkdirSync(join(tmpRoot, ".overreach"), { recursive: true });
+    claimFiles(tmpRoot, ["src/auth.ts"], "agent-a", "auth work", "30m");
+    const before = readClaims(tmpRoot);
+    const beforeExpiry = new Date(before[0].expires_at).getTime();
+    extendClaim(tmpRoot, "agent-a", ["src/auth.ts"], "2h");
+    const after = readClaims(tmpRoot);
+    const afterExpiry = new Date(after[0].expires_at).getTime();
+    ok("extend_claim pushes expiry forward", afterExpiry > beforeExpiry);
+    const result = extendClaim(tmpRoot, "agent-a", ["nonexistent.ts"], "2h");
+    ok("extend_claim returns not_found for unclaimed files", result.not_found.includes("nonexistent.ts"));
+    rmSync(tmpRoot, { recursive: true });
+  }
+
+  // -- [21] has_conflicts includes recent_touches -------------------------------
+  console.log("\n[21] has_conflicts includes recent_touches");
+  {
+    const { checkConflicts } = await import("../src/claims.js");
+    const { mkdirSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const tmpRoot = join(process.cwd(), ".test-hasconflict-tmp");
+    mkdirSync(join(tmpRoot, ".overreach"), { recursive: true });
+    const recentEntries = [
+      { agent: "other-agent", task: "refactor auth", files_touched: ["src/auth.ts"], at: new Date().toISOString() },
+    ];
+    const report = checkConflicts(tmpRoot, ["src/auth.ts"], "my-agent", recentEntries);
+    ok("has_conflicts is true when recent_touches exist (no claims)", report.has_conflicts === true);
+    ok("recent_touches has the other agent's entry", report.recent_touches.length === 1);
+    const noConflict = checkConflicts(tmpRoot, ["src/new.ts"], "my-agent", recentEntries);
+    ok("has_conflicts is false when no overlap", noConflict.has_conflicts === false);
+    rmSync(tmpRoot, { recursive: true });
+  }
+
+  // -- [22] ledger: task_id + issue_ref traceability ----------------------------
+  console.log("\n[22] ledger: task_id + issue_ref traceability");
+  {
+    const { appendLedger, readLedger } = await import("../src/ledger.js");
+    const { mkdirSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const tmpRoot = join(process.cwd(), ".test-trace-tmp");
+    mkdirSync(join(tmpRoot, ".overreach"), { recursive: true });
+    const fakeResult: any = {
+      schema_version: "1.0",
+      scope: { files_allowed: [], features_allowed: [], endpoints_allowed: [], deps_allowed: [], env_allowed: [], behavioral_changes_allowed: [] },
+      actual: { files_changed: ["src/auth.ts"], symbols_added: [], imports_added: [], env_vars_added: [], endpoints_added: [], cron_added: [], new_deps: [] },
+      findings: [],
+      scope_creep_score: "LOW",
+      summary: "clean",
+    };
+    appendLedger(tmpRoot, fakeResult, "agent-a", "add login", { taskId: "PROJ-123", issueRef: "github:org/repo#42" });
+    const entries = readLedger(tmpRoot);
+    ok("ledger entry has task_id", entries[0].task_id === "PROJ-123");
+    ok("ledger entry has issue_ref", entries[0].issue_ref === "github:org/repo#42");
+    rmSync(tmpRoot, { recursive: true });
+  }
+
   // -- Summary ------------------------------------------------------------------
   console.log(`\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`);
   console.log(`  ${passes} passed, ${failures} failed`);

@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 import { checkOverreach } from "./tools/check_overreach.js";
 import { validateHandoff } from "./handoff/validate.js";
 import { readLedger, appendLedger, formatLedgerForAgent, queryByFile, fileOwnershipMap } from "./ledger.js";
-import { claimFiles, releaseClaims, checkConflicts, readClaims, formatClaims } from "./claims.js";
+import { claimFiles, releaseClaims, extendClaim, checkConflicts, readClaims, formatClaims } from "./claims.js";
 import { PORT, HOST } from "./config.js";
 
 // Read the version from package.json so serverInfo / health stay in sync with
@@ -90,6 +90,8 @@ server.tool(
     audit_result: z.string().describe("The full JSON result from check_overreach (must include actual.files_changed and scope_creep_score)."),
     agent_name: z.string().describe("Name or identifier of the agent that did the work."),
     task_summary: z.string().describe("One-line description of what this agent was tasked with."),
+    task_id: z.string().optional().describe("Optional task/ticket ID for traceability (e.g. 'PROJ-123')."),
+    issue_ref: z.string().optional().describe("Optional issue reference for traceability (e.g. 'github:org/repo#42')."),
   },
   async (args) => {
     let result;
@@ -98,7 +100,10 @@ server.tool(
     } catch {
       return { content: [{ type: "text" as const, text: JSON.stringify({ error: "audit_result must be valid JSON" }) }] };
     }
-    appendLedger(args.project_root, result, args.agent_name, args.task_summary);
+    appendLedger(args.project_root, result, args.agent_name, args.task_summary, {
+      taskId: args.task_id,
+      issueRef: args.issue_ref,
+    });
     const entries = readLedger(args.project_root);
     return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, total_entries: entries.length }) }] };
   },
@@ -131,6 +136,21 @@ server.tool(
   async (args) => {
     const released = releaseClaims(args.project_root, args.agent_name, args.files);
     return { content: [{ type: "text" as const, text: JSON.stringify({ released }) }] };
+  },
+);
+
+server.tool(
+  "extend_claim",
+  "Extend the duration of your existing file claims. Use when your work is taking longer than the original claim duration.",
+  {
+    project_root: z.string().describe("Absolute path to the project root."),
+    agent_name: z.string().describe("Your agent name/identifier."),
+    files: z.array(z.string()).describe("File paths to extend."),
+    duration: z.string().describe("New duration from now: '30m', '2h', '1d'."),
+  },
+  async (args) => {
+    const result = extendClaim(args.project_root, args.agent_name, args.files, args.duration);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
   },
 );
 

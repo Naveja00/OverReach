@@ -248,6 +248,29 @@ ${CODEX_MARKER}
     createdConfig = true;
   }
 
+  // 7. Ensure .gitignore excludes transient coordination files but keeps prompt/config
+  const gitignoreFile = join(gitRoot, ".gitignore");
+  const GITIGNORE_MARKER = "# >>> overreach";
+  const GITIGNORE_BLOCK = `
+${GITIGNORE_MARKER}
+.overreach/scope-cache/
+.overreach/claims.json
+.overreach/*.lock
+${GITIGNORE_MARKER}
+`;
+  let updatedGitignore = false;
+  if (existsSync(gitignoreFile)) {
+    const existing = readFileSync(gitignoreFile, "utf-8");
+    if (!existing.includes(GITIGNORE_MARKER)) {
+      const content = existing.endsWith("\n") ? existing : existing + "\n";
+      writeFileSync(gitignoreFile, content + GITIGNORE_BLOCK, "utf-8");
+      updatedGitignore = true;
+    }
+  } else {
+    writeFileSync(gitignoreFile, GITIGNORE_BLOCK.trimStart(), "utf-8");
+    updatedGitignore = true;
+  }
+
   // Summary
   console.log(c(ANSI.bold)("Overreach — project setup complete\n"));
 
@@ -290,6 +313,13 @@ ${CODEX_MARKER}
     console.log(c(ANSI.dim)("    Cross-vendor coordination config (claims, ledger, rules).\n"));
   } else {
     console.log(c(ANSI.dim)("  · .overreach/config.json already exists\n"));
+  }
+
+  if (updatedGitignore) {
+    console.log(c(ANSI.green)("  ✓ Updated .gitignore"));
+    console.log(c(ANSI.dim)("    Excludes scope-cache, claims.json, lock files. Keeps prompt.md + config.json + ledger.json.\n"));
+  } else {
+    console.log(c(ANSI.dim)("  · .gitignore already has Overreach entries\n"));
   }
 
   console.log(c(ANSI.bold)("Next steps:"));

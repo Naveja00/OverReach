@@ -19,6 +19,7 @@ import {
   ollamaBaseUrl,
   resolveProvider,
   resolveModel,
+  looksReal,
   type Provider,
 } from "../config.js";
 import { extractDeterministic } from "./extract_deterministic.js";
@@ -65,10 +66,6 @@ const CHUNK_MAX = parseInt(process.env.OVERREACH_CHUNK_MAX || "600", 10);
 // Reconcile pass: "auto" = on when chunked OR prompt is non-trivial, "on" = always, "off" = never.
 const RECONCILE = (process.env.SCOPE_RECONCILE || "auto") as "auto" | "on" | "off";
 const RECONCILE_THRESHOLD = parseInt(process.env.OVERREACH_RECONCILE_THRESHOLD || "300", 10);
-
-function looksReal(key: string): boolean {
-  return Boolean(key && !key.includes("your_") && key.length > 8);
-}
 
 export function hasKey(): boolean {
   const provider = resolveProvider();

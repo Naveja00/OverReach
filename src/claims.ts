@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { resolveExpiry, isExpiredTimestamp, isAfterCutoff, withFileLock } from "./utils.js";
 
 export interface FileClaim {
   file: string;
@@ -30,22 +31,8 @@ function writeClaims(root: string, claims: FileClaim[]): void {
   writeFileSync(claimsPath(root), JSON.stringify(claims, null, 2) + "\n", "utf-8");
 }
 
-function isExpired(claim: FileClaim): boolean {
-  return new Date(claim.expires_at) < new Date();
-}
-
 function purgeStaleClaims(claims: FileClaim[]): FileClaim[] {
-  return claims.filter(c => !isExpired(c));
-}
-
-function resolveExpiry(duration?: string): string {
-  const d = duration ?? "2h";
-  const m = d.match(/^(\d+)(m|h|d)$/);
-  if (m) {
-    const ms = { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2]]!;
-    return new Date(Date.now() + parseInt(m[1]) * ms).toISOString();
-  }
-  return d;
+  return claims.filter(c => !isExpiredTimestamp(c.expires_at));
 }
 
 export interface ClaimResult {
@@ -60,41 +47,67 @@ export function claimFiles(
   task: string,
   duration?: string,
 ): ClaimResult {
-  let claims = purgeStaleClaims(readClaims(root));
-  const expiresAt = resolveExpiry(duration);
-  const claimed: string[] = [];
-  const conflicts: ClaimResult["conflicts"] = [];
+  return withFileLock(claimsPath(root), () => {
+    let claims = purgeStaleClaims(readClaims(root));
+    const expiresAt = resolveExpiry(duration);
+    const claimed: string[] = [];
+    const conflicts: ClaimResult["conflicts"] = [];
 
-  for (const file of files) {
-    const existing = claims.find(c => c.file === file && c.agent !== agent);
-    if (existing) {
-      conflicts.push({
-        file,
-        held_by: existing.agent,
-        task: existing.task,
-        expires_at: existing.expires_at,
-      });
-    } else {
-      claims = claims.filter(c => !(c.file === file && c.agent === agent));
-      claims.push({ file, agent, task, claimed_at: new Date().toISOString(), expires_at: expiresAt });
-      claimed.push(file);
+    for (const file of files) {
+      const existing = claims.find(c => c.file === file && c.agent !== agent);
+      if (existing) {
+        conflicts.push({
+          file,
+          held_by: existing.agent,
+          task: existing.task,
+          expires_at: existing.expires_at,
+        });
+      } else {
+        claims = claims.filter(c => !(c.file === file && c.agent === agent));
+        claims.push({ file, agent, task, claimed_at: new Date().toISOString(), expires_at: expiresAt });
+        claimed.push(file);
+      }
     }
-  }
 
-  writeClaims(root, claims);
-  return { claimed, conflicts };
+    writeClaims(root, claims);
+    return { claimed, conflicts };
+  });
 }
 
 export function releaseClaims(root: string, agent: string, files?: string[]): number {
-  let claims = purgeStaleClaims(readClaims(root));
-  const before = claims.length;
-  if (files) {
-    claims = claims.filter(c => !(c.agent === agent && files.includes(c.file)));
-  } else {
-    claims = claims.filter(c => c.agent !== agent);
-  }
-  writeClaims(root, claims);
-  return before - claims.length;
+  return withFileLock(claimsPath(root), () => {
+    let claims = purgeStaleClaims(readClaims(root));
+    const before = claims.length;
+    if (files) {
+      claims = claims.filter(c => !(c.agent === agent && files.includes(c.file)));
+    } else {
+      claims = claims.filter(c => c.agent !== agent);
+    }
+    writeClaims(root, claims);
+    return before - claims.length;
+  });
+}
+
+export function extendClaim(root: string, agent: string, files: string[], duration: string): { extended: string[]; not_found: string[] } {
+  return withFileLock(claimsPath(root), () => {
+    let claims = purgeStaleClaims(readClaims(root));
+    const newExpiry = resolveExpiry(duration);
+    const extended: string[] = [];
+    const not_found: string[] = [];
+
+    for (const file of files) {
+      const claim = claims.find(c => c.file === file && c.agent === agent);
+      if (claim) {
+        claim.expires_at = newExpiry;
+        extended.push(file);
+      } else {
+        not_found.push(file);
+      }
+    }
+
+    writeClaims(root, claims);
+    return { extended, not_found };
+  });
 }
 
 export interface ConflictReport {
@@ -136,9 +149,8 @@ export function checkConflicts(
   }
 
   if (ledgerEntries) {
-    const cutoff = new Date(Date.now() - 3_600_000).toISOString();
     for (const entry of ledgerEntries) {
-      if (entry.at < cutoff) continue;
+      if (!isAfterCutoff(entry.at, 3_600_000)) continue;
       if (entry.agent === agent) continue;
       for (const file of files) {
         if (entry.files_touched.includes(file)) {
@@ -148,7 +160,7 @@ export function checkConflicts(
     }
   }
 
-  return { has_conflicts: conflicts.length > 0, conflicts, recent_touches };
+  return { has_conflicts: conflicts.length > 0 || recent_touches.length > 0, conflicts, recent_touches };
 }
 
 export function formatClaims(claims: FileClaim[]): string {

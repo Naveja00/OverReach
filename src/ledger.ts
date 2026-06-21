@@ -1,22 +1,16 @@
-// Ledger — append-only coordination file for multi-agent workflows.
-//
-// .overreach/ledger.json is a flat array of LedgerEntry objects. Each entry
-// records what an agent did: its contract id, agent name, task summary, files
-// touched, findings count, score, and timestamp. Agents read the ledger before
-// starting to see what's been done; the pre-commit hook appends after a
-// successful audit.
-//
-// No server, no database — just a JSON file in git. Merge conflicts are
-// handled by git like any other file.
-
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { withFileLock } from "./utils.js";
 import type { CheckResult, CreepScore } from "./types.js";
+
+const MAX_ENTRIES = parseInt(process.env.OVERREACH_LEDGER_MAX || "500", 10);
 
 export interface LedgerEntry {
   contract_id?: string;
   agent: string;
   task: string;
+  task_id?: string;
+  issue_ref?: string;
   files_touched: string[];
   findings_count: number;
   score: CreepScore;
@@ -43,28 +37,37 @@ export function appendLedger(
   result: CheckResult,
   agentName: string,
   taskSummary: string,
+  opts?: { taskId?: string; issueRef?: string },
 ): void {
-  const dir = dirname(ledgerPath(root));
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  withFileLock(ledgerPath(root), () => {
+    const dir = dirname(ledgerPath(root));
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-  const entries = readLedger(root);
-  const entry: LedgerEntry = {
-    contract_id: result.contract?.id,
-    agent: agentName,
-    task: taskSummary.length > 200 ? taskSummary.slice(0, 200) + "..." : taskSummary,
-    files_touched: result.actual.files_changed,
-    findings_count: result.findings.length,
-    score: result.scope_creep_score,
-    at: new Date().toISOString(),
-  };
+    let entries = readLedger(root);
+    const entry: LedgerEntry = {
+      contract_id: result.contract?.id,
+      agent: agentName,
+      task: taskSummary.length > 200 ? taskSummary.slice(0, 200) + "..." : taskSummary,
+      files_touched: result.actual.files_changed,
+      findings_count: result.findings.length,
+      score: result.scope_creep_score,
+      at: new Date().toISOString(),
+    };
+    if (opts?.taskId) entry.task_id = opts.taskId;
+    if (opts?.issueRef) entry.issue_ref = opts.issueRef;
 
-  // Dedupe: don't append if the same contract_id already exists
-  if (entry.contract_id && entries.some(e => e.contract_id === entry.contract_id)) {
-    return;
-  }
+    if (entry.contract_id && entries.some(e => e.contract_id === entry.contract_id)) {
+      return;
+    }
 
-  entries.push(entry);
-  writeFileSync(ledgerPath(root), JSON.stringify(entries, null, 2) + "\n", "utf-8");
+    entries.push(entry);
+
+    if (entries.length > MAX_ENTRIES) {
+      entries = entries.slice(entries.length - MAX_ENTRIES);
+    }
+
+    writeFileSync(ledgerPath(root), JSON.stringify(entries, null, 2) + "\n", "utf-8");
+  });
 }
 
 export function queryByFile(entries: LedgerEntry[], file: string): LedgerEntry[] {
@@ -91,7 +94,8 @@ export function formatLedgerForAgent(entries: LedgerEntry[]): string {
   if (entries.length === 0) return "No prior agent work recorded.";
   const lines = entries.map((e, i) => {
     const files = e.files_touched.length > 0 ? e.files_touched.join(", ") : "none";
-    return `${i + 1}. [${e.agent}] ${e.task} (${e.score}, ${e.findings_count} findings, files: ${files}) — ${e.at}`;
+    const ref = e.issue_ref ? ` [${e.issue_ref}]` : "";
+    return `${i + 1}. [${e.agent}] ${e.task}${ref} (${e.score}, ${e.findings_count} findings, files: ${files}) — ${e.at}`;
   });
   return `Prior agent work (${entries.length} entries):\n${lines.join("\n")}`;
 }

@@ -89,6 +89,7 @@ export interface BuildContractInput {
   reconcileChanged: boolean;
   findingsAtIssue: number;
   parentContract?: ExecutionContract;
+  parentScore?: CreepScore;
   identity?: Partial<ExecutionContract["identity"]>;
   context?: Partial<ExecutionContract["context"]>;
   expiresAt?: string;
@@ -116,7 +117,7 @@ export function buildContract(input: BuildContractInput): ExecutionContract {
       scope_summary: summarizeScope(input.parentContract.authorization),
       files_touched: [],
       findings_count: input.parentContract.audit.findings_at_issue,
-      score: input.parentContract.audit.findings_at_issue > 0 ? "HIGH" as CreepScore : "LOW" as CreepScore,
+      score: input.parentScore ?? (input.parentContract.audit.findings_at_issue > 0 ? "MEDIUM" as CreepScore : "LOW" as CreepScore),
       at: input.parentContract.issued_at,
     };
     chain = [...parentChain, parentLink];

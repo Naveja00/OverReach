@@ -2,6 +2,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { resolveExpiry, isExpiredTimestamp, withFileLock } from "./utils.js";
+import { recordConflict } from "./resolve.js";
+import { appendLedger } from "./ledger.js";
+import type { CheckResult } from "./types.js";
 
 export interface ScopeDSL {
   files?: {
@@ -31,6 +34,7 @@ export interface ClaimScopeResult {
   claim_id: string;
   status: "locked" | "rejected";
   conflicts?: Array<{ file: string; held_by: string; claim_id: string }>;
+  conflict_id?: string;
   locked_scope?: ScopeDSL;
   rejection_reason?: string;
 }
@@ -160,11 +164,23 @@ export function claimScope(
     }
 
     if (conflicts.length > 0) {
+      const conflictAgents = [...new Set(conflicts.map(c => c.held_by))];
+      const conflictClaimIds = [...new Set(conflicts.map(c => c.claim_id))];
+      const conflictFiles = conflicts.map(c => c.file);
+
+      const recorded = recordConflict(
+        root,
+        conflictFiles,
+        [agent, ...conflictAgents],
+        conflictClaimIds,
+      );
+
       return {
         claim_id: "",
         status: "rejected" as const,
         conflicts,
-        rejection_reason: `File conflicts with ${[...new Set(conflicts.map(c => c.held_by))].join(", ")}`,
+        conflict_id: recorded.conflict_id,
+        rejection_reason: `File conflicts with ${conflictAgents.join(", ")}`,
       };
     }
 
@@ -239,6 +255,33 @@ export function completeClaim(root: string, claimId: string): boolean {
     if (!claim) return false;
     claim.status = "completed";
     writeIndex(root, claims);
+
+    const files = [
+      ...(claim.scope.files?.create || []),
+      ...(claim.scope.files?.modify || []),
+      ...(claim.scope.files?.delete || []),
+    ];
+    const syntheticResult: CheckResult = {
+      schema_version: "1.0",
+      scope: dslToScope(claim.scope),
+      actual: {
+        files_changed: files,
+        symbols_added: [],
+        imports_added: [],
+        env_vars_added: claim.scope.env_vars || [],
+        endpoints_added: claim.scope.api_routes || [],
+        cron_added: [],
+        new_deps: claim.scope.dependencies || [],
+      },
+      findings: [],
+      scope_creep_score: "LOW",
+      summary: "DSL-declared scope completed",
+      mode: "dsl",
+      confidence: 1.0,
+      claim_id: claim.claim_id,
+    };
+    appendLedger(root, syntheticResult, claim.agent, claim.task);
+
     return true;
   });
 }

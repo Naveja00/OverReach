@@ -46,6 +46,15 @@ export async function runDSLTests(ok: (name: string, cond: boolean, detail?: str
     ok("conflicting claim is rejected", c2.status === "rejected");
     ok("conflict identifies the file", c2.conflicts!.some(c => c.file === "checkout.tsx"));
     ok("conflict identifies the holder", c2.conflicts!.some(c => c.held_by === "claude"));
+    ok("auto-records conflict_id on rejection", typeof c2.conflict_id === "string" && c2.conflict_id.length > 0);
+
+    // Verify the auto-recorded conflict exists and can be resolved
+    const { getConflict, resolveConflict } = await import("../src/resolve.js");
+    const autoConflict = getConflict(tmpRoot, c2.conflict_id!);
+    ok("auto-recorded conflict is open", autoConflict!.status === "open");
+    ok("auto-recorded conflict has correct files", autoConflict!.files.includes("checkout.tsx"));
+    const resolved = resolveConflict(tmpRoot, c2.conflict_id!, "block", "human");
+    ok("auto-recorded conflict can be resolved", resolved.status === "resolved");
 
     const c3 = claimScope(tmpRoot, "cursor", "Add tests", {
       files: { create: ["tests/checkout.test.ts"] },
@@ -59,6 +68,17 @@ export async function runDSLTests(ok: (name: string, cond: boolean, detail?: str
     ok("completeClaim returns true", completed);
     const activeAfter = listActiveClaims(tmpRoot);
     ok("completed claim no longer in active list", activeAfter.length === 1);
+
+    // Verify ledger was auto-populated
+    const { readLedger } = await import("../src/ledger.js");
+    const ledger = readLedger(tmpRoot);
+    ok("completeClaim auto-logs to ledger", ledger.length >= 1);
+    const lastEntry = ledger[ledger.length - 1];
+    ok("ledger entry has mode dsl", lastEntry.mode === "dsl");
+    ok("ledger entry has confidence 1.0", lastEntry.confidence === 1.0);
+    ok("ledger entry has claim_id", lastEntry.claim_id === c1.claim_id);
+    ok("ledger entry has correct agent", lastEntry.agent === "claude");
+    ok("ledger entry has files_touched", lastEntry.files_touched.length > 0);
 
     const c4 = claimScope(tmpRoot, "cursor", "Restyle checkout", {
       files: { modify: ["checkout.tsx"] },

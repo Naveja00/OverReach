@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { withFileLock } from "./utils.js";
-import type { CheckResult, CreepScore } from "./types.js";
+import type { CheckResult, CreepScore, ScopeMode } from "./types.js";
 
 const MAX_ENTRIES = parseInt(process.env.OVERREACH_LEDGER_MAX || "500", 10);
 
@@ -14,6 +14,9 @@ export interface LedgerEntry {
   files_touched: string[];
   findings_count: number;
   score: CreepScore;
+  mode?: ScopeMode;
+  confidence?: number;
+  claim_id?: string;
   at: string;
 }
 
@@ -51,8 +54,11 @@ export function appendLedger(
       files_touched: result.actual.files_changed,
       findings_count: result.findings.length,
       score: result.scope_creep_score,
+      mode: result.mode,
+      confidence: result.confidence,
       at: new Date().toISOString(),
     };
+    if (result.claim_id) entry.claim_id = result.claim_id;
     if (opts?.taskId) entry.task_id = opts.taskId;
     if (opts?.issueRef) entry.issue_ref = opts.issueRef;
 

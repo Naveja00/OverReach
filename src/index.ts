@@ -11,6 +11,8 @@ import { checkOverreach } from "./tools/check_overreach.js";
 import { validateHandoff } from "./handoff/validate.js";
 import { readLedger, appendLedger, formatLedgerForAgent, queryByFile, fileOwnershipMap } from "./ledger.js";
 import { claimFiles, releaseClaims, extendClaim, checkConflicts, readClaims, formatClaims } from "./claims.js";
+import { claimScope, validateDSL, listActiveClaims, completeClaim } from "./scope_dsl.js";
+import { resolveConflict, recordConflict, listOpenConflicts } from "./resolve.js";
 import { PORT, HOST } from "./config.js";
 
 // Read the version from package.json so serverInfo / health stay in sync with
@@ -26,15 +28,19 @@ const server = new McpServer({
 
 server.tool(
   "check_overreach",
-  "Audit a code diff against the originating natural-language prompt. Flags every out-of-scope (overreaching) change the AI agent made — unauthorized deps, env vars, endpoints, cron jobs, files, and features. Returns structured findings + a scope_creep_score.",
+  "Audit a code diff against the originating natural-language prompt. Flags every out-of-scope (overreaching) change the AI agent made — unauthorized deps, env vars, endpoints, cron jobs, files, and features. Returns structured findings + a scope_creep_score. If a claim_id from claim_scope is provided, skips LLM extraction entirely and validates against the declared DSL scope (deterministic, zero API cost).",
   {
     prompt: z.string().describe("The natural-language instruction the agent was given (the authorized scope)."),
     diff: z.string().describe("A unified git diff (`git diff` output) of the changes to audit."),
     language: z.enum(["python", "typescript", "auto"]).optional().describe("Optional language hint; default auto-detect."),
+    claim_id: z.string().optional().describe("Optional claim ID from claim_scope. When provided, uses the DSL scope instead of LLM extraction — deterministic, zero API cost."),
+    project_root: z.string().optional().describe("Project root (required when claim_id is provided, to locate .overreach/scopes/)."),
   },
   async (args) => {
     const result = await checkOverreach(args.prompt, args.diff, {
       language: args.language as "python" | "typescript" | "auto" | undefined,
+      claimId: args.claim_id,
+      projectRoot: args.project_root,
     });
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
   },
@@ -196,6 +202,100 @@ server.tool(
   async (args) => {
     const claims = readClaims(args.project_root);
     return { content: [{ type: "text" as const, text: formatClaims(claims) }] };
+  },
+);
+
+server.tool(
+  "claim_scope",
+  "Declare what you will do BEFORE doing it. Creates a structured scope contract (DSL) that specifies exactly which files you'll create/modify/delete, which dependencies you'll add, which env vars you'll use, and which API routes you'll create. Returns a claim_id — pass it to check_overreach for deterministic, zero-API-cost validation. Conflicts with other agents' active claims are detected and rejected automatically.",
+  {
+    project_root: z.string().describe("Absolute path to the project root."),
+    agent_name: z.string().describe("Your agent name/identifier."),
+    task: z.string().describe("What you're about to do (one line)."),
+    scope: z.object({
+      files: z.object({
+        create: z.array(z.string()).optional().describe("Files you will create."),
+        modify: z.array(z.string()).optional().describe("Files you will modify."),
+        delete: z.array(z.string()).optional().describe("Files you will delete."),
+      }).optional().describe("File operations you plan to perform."),
+      dependencies: z.array(z.string()).optional().describe("Packages/deps you will add."),
+      env_vars: z.array(z.string()).optional().describe("Environment variables you will use."),
+      api_routes: z.array(z.string()).optional().describe("API routes/endpoints you will create."),
+    }).describe("The scope contract — what you're authorized to do."),
+    duration: z.string().optional().describe("How long the claim lasts: '30m', '2h', '1d'. Default: '2h'."),
+    parent_claim: z.string().optional().describe("Parent claim ID if this is a delegated subtask. Child scope must narrow the parent — it cannot add files/deps the parent didn't authorize."),
+  },
+  async (args) => {
+    const validation = validateDSL(args.scope);
+    if (!validation.valid) {
+      return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Invalid scope DSL", details: validation.errors }) }] };
+    }
+    const result = claimScope(
+      args.project_root,
+      args.agent_name,
+      args.task,
+      args.scope,
+      { duration: args.duration, parentClaim: args.parent_claim },
+    );
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.tool(
+  "complete_scope",
+  "Mark a scope claim as completed after your work is done. Releases the file locks so other agents can claim those files.",
+  {
+    project_root: z.string().describe("Absolute path to the project root."),
+    claim_id: z.string().describe("The claim_id returned by claim_scope."),
+  },
+  async (args) => {
+    const ok = completeClaim(args.project_root, args.claim_id);
+    return { content: [{ type: "text" as const, text: JSON.stringify({ ok, claim_id: args.claim_id }) }] };
+  },
+);
+
+server.tool(
+  "resolve_claim",
+  "Resolve a detected conflict between agents. Strategies: 'block' (later agent must wait or pick different files) or 'escalate' (flag for human review). More strategies (merge, override) coming in v0.5.",
+  {
+    project_root: z.string().describe("Absolute path to the project root."),
+    conflict_id: z.string().describe("The conflict_id to resolve."),
+    strategy: z.enum(["block", "escalate"]).describe("Resolution strategy: 'block' stops the later agent, 'escalate' flags for human decision."),
+    resolved_by: z.string().describe("Who is resolving this (agent name or 'human')."),
+  },
+  async (args) => {
+    const result = resolveConflict(args.project_root, args.conflict_id, args.strategy, args.resolved_by);
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.tool(
+  "list_scope_claims",
+  "List all active scope claims (DSL declarations) across all agents. Shows what each agent has declared they will do.",
+  {
+    project_root: z.string().describe("Absolute path to the project root."),
+  },
+  async (args) => {
+    const claims = listActiveClaims(args.project_root);
+    if (claims.length === 0) {
+      return { content: [{ type: "text" as const, text: "No active scope claims." }] };
+    }
+    return { content: [{ type: "text" as const, text: JSON.stringify(claims, null, 2) }] };
+  },
+);
+
+server.tool(
+  "list_conflicts",
+  "List all open (unresolved) conflicts between agents.",
+  {
+    project_root: z.string().describe("Absolute path to the project root."),
+  },
+  async (args) => {
+    const conflicts = listOpenConflicts(args.project_root);
+    if (conflicts.length === 0) {
+      return { content: [{ type: "text" as const, text: "No open conflicts." }] };
+    }
+    return { content: [{ type: "text" as const, text: JSON.stringify(conflicts, null, 2) }] };
   },
 );
 

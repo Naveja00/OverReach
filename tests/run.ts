@@ -6,6 +6,7 @@
 import { readFileSync } from "node:fs";
 import { checkOverreach } from "../src/tools/check_overreach.js";
 import type { Scope, CheckResult } from "../src/types.js";
+import { runDSLTests } from "./dsl_tests.js";
 
 let failures = 0;
 let passes = 0;
@@ -475,6 +476,8 @@ async function main() {
     ok("ledger entry has issue_ref", entries[0].issue_ref === "github:org/repo#42");
     rmSync(tmpRoot, { recursive: true });
   }
+
+  await runDSLTests(ok, load, loadScope);
 
   // -- Summary ------------------------------------------------------------------
   console.log(`\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`);

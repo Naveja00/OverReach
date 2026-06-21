@@ -83,6 +83,8 @@ export interface ReconcileTelemetry {
   removed: string[]; // items reconcile removed as contradictions/dupes
 }
 
+export type ScopeMode = "dsl" | "inferred";
+
 export interface CheckResult {
   schema_version: typeof SCHEMA_VERSION;
   scope: Scope;
@@ -90,6 +92,8 @@ export interface CheckResult {
   findings: Finding[];
   scope_creep_score: CreepScore;
   summary: string;
+  mode: ScopeMode;
+  confidence: number;
   // True when the audit was SKIPPED: Stage 1 scope extraction failed AND a real
   // provider key was configured (an outage, not an intentional no-key paranoid
   // run). In that case findings=[] and score=LOW so a CI gate does not block PRs
@@ -100,6 +104,7 @@ export interface CheckResult {
   telemetry?: ReconcileTelemetry;
   contract?: ExecutionContract;
   contractNarrowing?: NarrowingResult;
+  claim_id?: string;
 }
 
 export interface CheckOptions {
@@ -117,4 +122,10 @@ export interface CheckOptions {
   agentName?: string;
   // ISO timestamp or duration (e.g. "30m", "2h") for contract expiration.
   expiresAt?: string;
+  // If provided, uses the DSL scope claim instead of LLM extraction (Stage 1
+  // is skipped entirely). Deterministic, zero API cost. The claim must exist
+  // and be in "locked" status.
+  claimId?: string;
+  // Project root for resolving DSL claims from .overreach/scopes/
+  projectRoot?: string;
 }

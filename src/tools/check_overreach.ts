@@ -6,7 +6,7 @@
 // is supplied, validates that the new contract only NARROWS the parent — a
 // narrowing violation on a concrete parent becomes a contract.expansion finding.
 
-import type { CheckOptions, CheckResult, Scope, Finding } from "../types.js";
+import type { CheckOptions, CheckResult, Scope, Finding, ScopeMode } from "../types.js";
 import { SCHEMA_VERSION } from "../types.js";
 import { parseDiff } from "../parsers/diff.js";
 import { compare, summarize } from "../compare/diff_scope.js";
@@ -15,6 +15,7 @@ import { resolveProvider, resolveModel } from "../config.js";
 import { buildContract } from "../contract/schema.js";
 import { isNarrower } from "../contract/narrow.js";
 import { resolveExpiry } from "../utils.js";
+import { getClaim, dslToScope } from "../scope_dsl.js";
 
 export async function checkOverreach(
   prompt: string,
@@ -26,8 +27,36 @@ export async function checkOverreach(
   let telemetry = undefined;
   let skipped = false;
   let deterministic = false;
+  let mode: ScopeMode = "inferred";
+  let confidence = 0.85;
+  let resolvedClaimId: string | undefined;
 
-  if (options.scopeOverride) {
+  if (options.claimId && options.projectRoot) {
+    // DSL fast path: skip Stage 1 entirely, use the declared scope
+    const claim = getClaim(options.projectRoot, options.claimId);
+    if (claim && claim.status === "locked") {
+      scope = dslToScope(claim.scope);
+      mode = "dsl";
+      confidence = 1.0;
+      deterministic = true;
+      resolvedClaimId = claim.claim_id;
+    } else if (claim && claim.status !== "locked") {
+      scope = dslToScope(claim.scope);
+      mode = "dsl";
+      confidence = 1.0;
+      deterministic = true;
+      resolvedClaimId = claim.claim_id;
+      warning = `Claim ${options.claimId.slice(0, 8)} has status "${claim.status}" (expected "locked")`;
+    } else {
+      // Claim not found — fall through to normal extraction
+      warning = `Claim ${options.claimId.slice(0, 8)} not found, falling back to prompt extraction`;
+      const extracted = await extractScope(prompt);
+      scope = extracted.scope;
+      telemetry = extracted.telemetry;
+      deterministic = !!(extracted as { deterministic?: boolean }).deterministic;
+      if (extracted.extractionFailed && extracted.keyConfigured) skipped = true;
+    }
+  } else if (options.scopeOverride) {
     scope = options.scopeOverride; // tests / demo: zero LLM, fully deterministic
   } else {
     const extracted = await extractScope(prompt);
@@ -60,10 +89,13 @@ export async function checkOverreach(
     findings,
     scope_creep_score: score,
     summary,
+    mode,
+    confidence,
   };
   if (skipped) result.skipped = true;
   if (deterministic) result.deterministic = true;
   if (telemetry) result.telemetry = telemetry;
+  if (resolvedClaimId) result.claim_id = resolvedClaimId;
 
   // Execution contract (optional). Promotes the scope to a versioned
   // authorization artifact with audit metadata; narrows against a parent if one

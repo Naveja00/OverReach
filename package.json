@@ -1,7 +1,7 @@
 {
   "name": "overreach",
   "version": "0.3.1",
-  "description": "MCP tool that audits a code diff against the originating prompt and flags out-of-scope (overreaching) changes an AI agent made.",
+  "description": "Scope audit + multi-agent coordination for AI coding agents. Catches scope creep in diffs and coordinates Claude Code, Cursor, and Codex on the same repo.",
   "type": "module",
   "license": "MIT",
   "bin": {
@@ -19,11 +19,14 @@
     "ai-coding",
     "scope-creep",
     "code-review",
+    "multi-agent",
+    "coordination",
     "claude",
     "cursor",
+    "codex",
     "agent",
     "diff",
-    "lint"
+    "file-locking"
   ],
   "engines": {
     "node": ">=18"

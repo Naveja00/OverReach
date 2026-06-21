@@ -4,20 +4,14 @@
 [![license](https://img.shields.io/npm/l/overreach.svg)](https://github.com/Naveja00/OverReach)
 [![CI](https://github.com/Naveja00/OverReach/actions/workflows/overreach.yml/badge.svg)](https://github.com/Naveja00/OverReach/actions/workflows/overreach.yml)
 
-A standalone MCP tool that catches AI-agent scope creep.
+**Scope audit + multi-agent coordination for AI coding agents.**
 
-You give it the **prompt** you gave your coding agent, and the **diff** it produced.
-Overreach tells you whether the diff stayed inside what the prompt asked for — or
-whether the agent quietly added an endpoint, a dependency, an env var, or a cron job
-that you never asked for.
+Overreach does two things no other tool does:
+
+1. **Catches scope creep** — audits a code diff against the prompt that authorized it. Flags every unauthorized dep, env var, endpoint, cron job, or file the agent added without being asked.
+2. **Coordinates multiple agents** — when Claude Code, Cursor, and Codex work on the same repo, Overreach tracks who touched what, prevents file collisions, and keeps every agent aware of the others' work. Cross-vendor. Just JSON files in git.
 
 > "turns out my ai assistant had been extremely making product decisions without me"
-
-## Prerequisites
-
-- **Node.js 18+** — [nodejs.org](https://nodejs.org). Verify with `node -v`.
-- **npm** comes with Node.js. Verify with `npm -v`.
-- **Git** — required for the pre-commit hook and `git diff` piping.
 
 ## Try it (no key needed)
 
@@ -26,13 +20,21 @@ npx -y -p overreach overreach-cli demo
 ```
 
 Runs the real pipeline on a sample diff — no API key, no setup, costs nothing.
-Exits `1` with a `HIGH` scope-creep finding (the demo prompt asks for a login form;
-the diff smuggles in Stripe, an env var, an endpoint, and a cron job). That's the
-whole product in one command.
+The demo prompt asks for a login form; the diff smuggles in Stripe, an env var,
+an endpoint, and a cron job. Overreach catches all four. That's the product in
+one command.
 
-## What it checks
+## Prerequisites
 
-A diff is flagged when it adds something the prompt never authorized:
+- **Node.js 18+** — [nodejs.org](https://nodejs.org)
+- **npm** (comes with Node.js)
+- **Git** — required for the pre-commit hook and `git diff` piping
+
+---
+
+## Part 1: Scope Audit
+
+### What it checks
 
 | Finding kind            | Caught when the diff adds…                                |
 | ----------------------- | -------------------------------------------------------- |
@@ -46,127 +48,164 @@ A diff is flagged when it adds something the prompt never authorized:
 Severity: env / endpoint / cron = **high** · dep / file = **medium** · feature = **low**.
 Overall `scope_creep_score`: `HIGH` if any high finding, `MEDIUM` if any medium, else `LOW`.
 
-## How it works (3 stages)
+### How it works (3 stages)
 
-1. **Stage 1 — Scope extraction (LLM).** Reads your prompt and produces an
-   `authorized scope` JSON: which files, features, deps, endpoints, env, and behaviors
-   you actually asked for. Deciphers typos to the nearest real concept but **never
-   invents scope**. This is the only stage that calls a model.
-2. **Stage 2 — Diff parsing (deterministic, no LLM).** Regex-parses the diff into the
-   set of things it actually adds — imports, deps, `process.env.X` references, route
-   handlers, cron jobs, new symbols. Runs in milliseconds.
-3. **Stage 3 — Comparison (deterministic).** Set arithmetic with fuzzy matching:
-   `actual − authorized = findings`.
+1. **Stage 1 — Scope extraction (LLM).** Reads your prompt → structured JSON of what
+   you actually asked for. Deciphers typos but **never invents scope**. Only stage
+   that calls a model.
+2. **Stage 2 — Diff parsing (deterministic).** Regex-parses the diff into what it
+   actually adds — imports, deps, env vars, routes, cron jobs, symbols. Milliseconds.
+3. **Stage 3 — Comparison (deterministic).** Set arithmetic: `actual − authorized = findings`.
 
 Stages 2 and 3 are pure functions — no inference, no opinion, fully auditable.
-That's what makes Overreach testable without spending a cent on inference.
 
-## Install
-
-```bash
-npm install -g overreach
-```
-
-Or use directly via `npx` (no install needed):
+### Quick start
 
 ```bash
-npx -y -p overreach overreach-cli demo
-```
-
-### API key (optional)
-
-For best results, set one LLM provider key for Stage 1 scope extraction:
-
-| Provider | Env vars |
-|---|---|
-| Anthropic | `ANTHROPIC_API_KEY` |
-| OpenAI / OpenAI-compatible (OpenRouter, Groq, Together, **LM Studio**, …) | `OPENAI_API_KEY` + `OPENAI_BASE_URL` (e.g. `http://localhost:1234/v1` for LM Studio) |
-| Ollama (Cloud or self-hosted) | `OLLAMA_API_KEY` + `OLLAMA_BASE_URL` |
-
-Pin a provider/model with `SCOPE_PROVIDER` and `OVERREACH_MODEL`.
-
-**No key? No problem.** Without an API key, Overreach falls back to
-**deterministic scope extraction** — it regex-parses your prompt for concrete
-items (file paths, package names, `/api/...` routes, `SCREAMING_SNAKE_CASE` env
-vars, cron keywords) instead of calling an LLM. It won't understand vague
-instructions as well as an LLM would, but it catches every concrete noun in
-your prompt. Instant, free, fully offline.
-
-## Quick start
-
-### 1. Set up a project (one command)
-
-```bash
+# Set up a project (creates prompt.md, pre-commit hook, CLAUDE.md, .cursorrules, codex.md)
 npx -y -p overreach overreach-cli init
-```
 
-This creates three things:
-- **`.overreach/prompt.md`** — write the prompt you gave your agent here
-- **`.git/hooks/pre-commit`** — audits every commit against your prompt
-- **`CLAUDE.md`** — instructs AI agents to self-audit before committing
+# Write your prompt
+echo "Add a login form to the settings page" > .overreach/prompt.md
 
-### 2. Write your prompt
-
-Edit `.overreach/prompt.md` with the actual instruction you gave your AI agent:
-
-```
-Add a login form to the settings page with email/password fields,
-form validation, and a submit button that calls /api/auth/login.
-```
-
-### 3. Commit — Overreach runs automatically
-
-```bash
+# Commit — Overreach runs automatically via the pre-commit hook
 git add . && git commit -m "add login form"
 ```
 
-The pre-commit hook audits staged changes against your prompt:
-- **HIGH** scope creep → commit blocked (exit 1)
-- **MEDIUM / LOW** → commit allowed with findings printed
-- Template prompt (not yet edited) → skipped gracefully
-- No API key → deterministic fallback (extracts concrete items from prompt)
+The pre-commit hook blocks commits on `HIGH` scope creep. Skip with `--no-verify`.
 
-Skip with `git commit --no-verify` when you know what you're doing. Update
-`.overreach/prompt.md` whenever you give the agent a new task.
-
-> **Windows:** The pre-commit hook is a shell script. It works out of the box
-> with Git Bash (included with [Git for Windows](https://gitforwindows.org)).
-
-## CLI (manual check)
+### CLI
 
 ```bash
-npx -y -p overreach overreach-cli --prompt "add a login form to the settings page" --diff my-changes.diff
-```
-
-Or pipe a diff:
-
-```bash
+# Pipe a diff
 git diff | npx -y -p overreach overreach-cli --prompt "add a login form to the settings page"
+
+# Or pass a diff file
+npx -y -p overreach overreach-cli --prompt "..." --diff changes.diff
+
+# JSON output for CI
+npx -y -p overreach overreach-cli --prompt "..." --json
 ```
 
 Exits `0` if clean, `1` if HIGH — usable as a CI gate.
 
-Options:
-- `--prompt <text>` — the instruction that authorized the work
-- `--diff <path>` — diff file (default: read from stdin)
-- `--scope <path|json>` — inject authorized scope; skips the LLM entirely
-- `--json` — emit raw JSON instead of pretty terminal output
-- `--no-cache` — bypass the scope cache (force a fresh Stage 1 call)
-- `demo` — run the canonical demo (zero-key)
-- `init` — install pre-commit hook + CLAUDE.md
+---
 
-## MCP server (Claude Code, Cursor, Codex, Claude Desktop)
+## Part 2: Multi-Agent Coordination
 
-Overreach is a stdio MCP server, so any MCP-capable client can connect:
+**The problem nobody else solves:** Claude Code only coordinates Claude-with-Claude.
+Codex worktrees only isolate Codex-with-Codex. When you use Claude Code for one task,
+Cursor for another, and Codex for a third — all on the same repo — there's zero
+awareness between them. Files get clobbered, work gets duplicated, agents contradict
+each other.
+
+**Overreach fixes this** with a coordination layer that any agent can read — it's just
+JSON files in `.overreach/` committed to git.
+
+### File Claims (prevent collisions)
+
+Agents claim files before working on them. Other agents see the claims and work elsewhere.
+
+```
+Agent A: claim_files(["src/auth.ts", "src/db.ts"])  → claimed
+Agent B: claim_files(["src/auth.ts"])                → conflict! held by Agent A
+Agent B: claim_files(["src/utils.ts"])               → claimed (no conflict)
+```
+
+Claims auto-expire (default 2h). Agents can extend claims if work takes longer.
+
+### Coordination Ledger (who did what)
+
+Every agent's work is logged to `.overreach/ledger.json` — what they did, which files
+they touched, their scope creep score, and when. Before starting, agents read the
+ledger to see what's already been done.
+
+```bash
+# View the ledger
+npx -y -p overreach overreach-cli ledger
+
+# Or check status (claims + ledger)
+npx -y -p overreach overreach-cli status
+```
+
+### Conflict Detection
+
+Before starting work, an agent checks for conflicts — both active claims AND files
+recently touched by other agents:
+
+```
+check_conflicts(files: ["src/auth.ts"], agent: "cursor")
+→ { has_conflicts: true, conflicts: [...], recent_touches: [...] }
+```
+
+### Traceability (who broke what)
+
+Every ledger entry can carry a `task_id` and `issue_ref`, so you can trace any file
+change back to the ticket that caused it:
+
+```
+who_touched(file: "src/auth.ts")
+→ [claude] add login flow (LOW) — 2026-06-20T10:00:00Z
+  [cursor] refactor auth middleware (MEDIUM) — 2026-06-20T11:30:00Z
+```
+
+### Agent-to-Agent Handoffs (delegation chains)
+
+When a parent agent delegates a subtask to a child agent, Overreach validates the
+child only **narrows** the parent's authorization — never expands it. The full
+delegation chain (A → B → C → ...) is preserved so any agent in the chain has
+complete project context.
+
+```
+Parent: "add user authentication"
+  → Child: "add password validation"     ✓ narrows (allowed)
+  → Child: "add Stripe billing"          ✗ expands (blocked)
+```
+
+Contracts have optional TTL — an expired contract flags `HIGH` so stale/abandoned
+agents don't keep committing under old authorization.
+
+### Cross-Vendor Init
+
+`overreach init` creates instructions for every major agent vendor:
+
+| File | Agent vendor |
+|---|---|
+| `CLAUDE.md` | Claude Code / Claude agents |
+| `.cursorrules` | Cursor |
+| `codex.md` | OpenAI Codex |
+| `.overreach/config.json` | Any agent (coordination rules) |
+| `.git/hooks/pre-commit` | All (auto-logs to ledger) |
+| `.gitignore` | Excludes transient files |
+
+### 11 MCP Tools
+
+| Tool | What it does |
+|---|---|
+| `check_overreach` | Audit a diff against a prompt |
+| `validate_handoff` | Validate agent-to-agent delegation |
+| `claim_files` | Claim files before working |
+| `release_files` | Release claims when done |
+| `extend_claim` | Extend claim duration |
+| `check_conflicts` | Check for file conflicts |
+| `who_touched` | Find which agents touched a file |
+| `active_claims` | List all active claims |
+| `read_ledger` | Read the coordination ledger |
+| `append_ledger` | Log completed work (with optional task_id/issue_ref) |
+| `health` | Health check |
+
+---
+
+## MCP Server Setup
+
+Overreach is a stdio MCP server — any MCP-capable client can connect:
 
 **Claude Code:**
-
 ```bash
 claude mcp add overreach -- npx -y overreach
 ```
 
 **Claude Desktop / Cursor** — add to your MCP config:
-
 ```json
 {
   "mcpServers": {
@@ -176,7 +215,6 @@ claude mcp add overreach -- npx -y overreach
 ```
 
 **Codex CLI** — add to `~/.codex/config.toml`:
-
 ```toml
 [mcp_servers.overreach]
 command = "npx"
@@ -185,83 +223,31 @@ args = ["-y", "overreach"]
 
 Or Streamable HTTP: set `PORT=8787` and POST to `http://localhost:8787/mcp`.
 
-> **The HTTP endpoint has no auth.** It binds to `127.0.0.1` (loopback) by
-> default — safe for local use. Do **not** expose it publicly
-> (`OVERREACH_HOST=0.0.0.0`) without an authed reverse proxy in front: anyone who
-> can reach it can call `check_overreach` and spend your LLM budget.
+> **The HTTP endpoint has no auth.** It binds to `127.0.0.1` by default. Do not
+> expose it publicly without an authed reverse proxy.
 
-Tools exposed: `check_overreach(prompt, diff, options?)` and `health`.
+### API key (optional)
 
-### First-time setup (Claude Code)
+| Provider | Env vars |
+|---|---|
+| Anthropic | `ANTHROPIC_API_KEY` |
+| OpenAI / compatible (OpenRouter, Groq, LM Studio, …) | `OPENAI_API_KEY` + `OPENAI_BASE_URL` |
+| Ollama (Cloud or local) | `OLLAMA_API_KEY` + `OLLAMA_BASE_URL` |
 
-```bash
-# 1. Register the server with Claude Code (one time)
-claude mcp add overreach -- npx -y overreach
+Pin a provider/model with `SCOPE_PROVIDER` and `OVERREACH_MODEL`.
 
-# 2. Restart your Claude Code session
-#    (a session already open won't see the new server until you quit and reopen it)
+**No key? No problem.** Deterministic scope extraction regex-parses your prompt for
+concrete items (file paths, package names, `/api/...` routes, env vars, cron keywords).
+Instant, free, fully offline.
 
-# 3. Optionally set an API key (works without one via deterministic fallback)
-export ANTHROPIC_API_KEY=sk-...     # or OPENAI_API_KEY / OLLAMA_API_KEY
-```
+## CI Gate (GitHub Action)
 
-After the restart, every new session has `check_overreach` available — no per-task
-setup. The agent calls it when it decides it's relevant.
-
-> **The key isn't passed through automatically.** The MCP server is a separate
-> process; your agent does **not** hand it its own credentials. If you log in to
-> Claude Code with `claude login` (OAuth / subscription), there's no
-> `ANTHROPIC_API_KEY` in the environment — so export one (any provider works; local
-> Ollama needs no key), or for Claude Desktop / Cursor add it to the server's `env`:
-> ```json
-> { "mcpServers": { "overreach": { "command": "npx", "args": ["-y", "overreach"], "env": { "ANTHROPIC_API_KEY": "sk-..." } } } }
-> ```
-
-### The agent self-audit pattern
-
-`overreach init` adds a scope-audit instruction to your project's `CLAUDE.md` so
-AI agents self-audit their staged changes before committing — no user intervention
-needed. The agent reads the instruction and runs Overreach on its own diff.
-
-You can also have the agent call `check_overreach` directly via the MCP server
-with its own task string + the diff it's about to commit:
-
-```
-git diff --staged | overreach-cli --prompt "<the task you just gave me>"
-```
-
-This is **best-effort** — an agent can skip the call or ignore the findings
-(fox guarding the henhouse). The hard backstop is the CI gate below.
-
-## CI gate (GitHub Action)
-
-The hard backstop. A workflow runs Overreach on every pull request and **fails
-the PR** when `scope_creep_score=HIGH` — the diff adds a dep / env var /
-endpoint / cron / out-of-scope file the prompt didn't authorize.
-
-Copy [`.github/workflows/overreach.yml`](.github/workflows/overreach.yml) into
-your repo and add `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` / `OLLAMA_API_KEY`)
-as a repository secret. The prompt comes from `.overreach/prompt.md` in the repo,
-or the PR title + body if that file is absent. The job posts its findings as a PR
-comment and fails the check on `HIGH`. Full setup + customization in
+The hard backstop. A workflow runs Overreach on every PR and **fails the check** on
+`scope_creep_score=HIGH`. Copy [`.github/workflows/overreach.yml`](.github/workflows/overreach.yml)
+into your repo and add your API key as a repository secret. Full setup in
 [`docs/ci-gate.md`](docs/ci-gate.md).
 
-```yaml
-# .github/workflows/overreach.yml  (excerpt)
-- name: Run Overreach
-  run: |
-    npx -y -p overreach@latest overreach-cli \
-      --prompt "$(cat "$RUNNER_TEMP/prompt.txt")" --diff "$RUNNER_TEMP/pr.diff"
-  env:
-    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-- name: Gate — fail the PR on HIGH
-  if: steps.overreach.outputs.exit == '1'
-  run: exit 1
-```
-
-This open-source Action is free to run (you bring your own LLM key).
-
-## Tested models
+## Tested Models
 
 | Model | Result |
 |---|---|
@@ -271,37 +257,29 @@ This open-source Action is free to run (you bring your own LLM key).
 | Kimi K2.7-Code | 82/82 |
 | MiniMax M3 | 81/82 |
 
-The deterministic fallback (no key) works with any prompt that contains concrete
-items — no model needed.
-
-## Verify it works (zero API key)
+## Tests (zero API key)
 
 ```bash
 npm test
 ```
 
-Runs 100 assertions through the real pipeline with the scope injected via
-`scopeOverride`, so Stage 1 (the LLM) is never called. Covers overreach
-detection, clean passes, Python/Express/Next.js parsers, deletion handling,
-determinism, chunking, trust contract invariant, agent-to-agent handoffs,
-contract narrowing/expiration, file claims, ledger queries, claim extension,
-conflict detection with recent touches, and issue traceability.
+100 deterministic assertions. Zero API calls. Covers scope detection, parsers,
+handoffs, contract narrowing/expiration, file claims, ledger queries, claim
+extension, conflict detection, and issue traceability.
 
-## Standalone
+## Architecture
 
-Overreach is fully self-contained. It does **not** import or depend on any other
-project. It reads only its own process environment. No telemetry, no call-home —
-it runs entirely on your machine.
+Overreach is fully self-contained. No external dependencies beyond the MCP SDK
+and LLM client. No telemetry, no call-home. Runs entirely on your machine.
 
-## Bugs & feedback
-
-If Overreach misses something it should flag, or flags something the prompt
-authorized, open an issue with the **prompt + the smallest repro diff**:
-
-https://github.com/Naveja00/OverReach/issues
-
-There's a bug-report template that asks for exactly that.
+The trust contract: **every scope finding is derivable from (prompt, diff) by
+deterministic set arithmetic.** No finding depends on inference or opinion. This
+is what separates Overreach from probabilistic AI reviewers.
 
 ## License
 
 MIT
+
+## Bugs & Feedback
+
+https://github.com/Naveja00/OverReach/issues

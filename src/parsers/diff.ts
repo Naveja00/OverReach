@@ -102,6 +102,9 @@ function endpoint(code: string): string | null {
   // list.find("x") etc. don't false-positive into endpoints.
   const gen = code.match(/\.(?:get|post|put|delete|patch)\(\s*['"`]([^'"`]+)['"`]/);
   if (gen && (gen[1].startsWith("/") || /api/i.test(gen[1]))) return gen[1];
+  // fetch("/api/...") or fetch("/path") — agents smuggle endpoints as client-side fetch calls
+  const fetched = code.match(/\bfetch\(\s*['"`]([^'"`]+)['"`]/);
+  if (fetched && fetched[1].startsWith("/")) return fetched[1];
   // Note: bare `export async function GET/POST` handlers are intentionally NOT
   // emitted here — the Next route file is detected via routeFromFile() instead,
   // which yields the actual path and avoids a bare "POST" false positive.

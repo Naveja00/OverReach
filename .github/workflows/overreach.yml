@@ -8,13 +8,13 @@
 #   1. `.overreach/prompt.md` committed in the repo
 #   2. the PR title + body
 #
-# Requires an LLM provider key as a REPOSITORY SECRET for Stage 1 scope
-# extraction. Set ONE of:
+# Works with or without an LLM provider key. Without a key, the CLI falls back
+# to deterministic regex-based scope extraction — still catches unauthorized
+# deps, env vars, endpoints, cron jobs, and files. For better scope extraction,
+# optionally set ONE of these repository secrets:
 #   ANTHROPIC_API_KEY   (recommended — best verified results, see TESTED-MODELS.md)
 #   OPENAI_API_KEY
 #   OLLAMA_API_KEY      (Ollama Cloud; also set OLLAMA_BASE_URL if needed)
-# If none is set, the job posts a one-time setup comment and skips the audit
-# (it never fails your PRs for lack of a key).
 #
 # Copy this file into YOUR repo at .github/workflows/overreach.yml to enable.
 name: overreach-scope-audit
@@ -63,22 +63,8 @@ jobs:
           echo "PR diff: $lines lines"
           if [ "$lines" -eq 0 ]; then echo "::notice::No diff to audit."; exit 0; fi
 
-      - name: Check provider key
-        id: keycheck
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
-        run: |
-          if [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$OPENAI_API_KEY" ] || [ -n "$OLLAMA_API_KEY" ]; then
-            echo "has_key=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_key=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Run Overreach
         id: overreach
-        if: steps.keycheck.outputs.has_key == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -90,6 +76,8 @@ jobs:
         run: |
           set +e
           # Run the CLI and capture ITS exit code (not a surrounding echo's).
+          # No API key? The CLI handles it — deterministic regex extraction,
+          # zero LLM calls, still catches deps/env/endpoints/cron/files.
           # stdout -> comment body; stderr (npx install notices / errors) -> run.log.
           npx -y -p overreach@latest overreach-cli \
             --prompt "$(cat "$RUNNER_TEMP/prompt.txt")" --diff "$RUNNER_TEMP/pr.diff" \
@@ -109,21 +97,6 @@ jobs:
           # Surface stderr (npx install notices / errors) in the Actions log.
           [ -s "$RUNNER_TEMP/run.log" ] && cat "$RUNNER_TEMP/run.log" || true
           exit 0
-
-      - name: Build setup comment (no key)
-        if: steps.keycheck.outputs.has_key == 'false'
-        run: |
-          {
-            echo "## 🔍 Overreach — not configured"
-            echo
-            echo "Overreach is wired into this repo's PR checks, but no LLM provider key is set, so this audit was skipped."
-            echo
-            echo "Add ONE of these repository secrets to enable:"
-            echo "- \`ANTHROPIC_API_KEY\` (recommended — best verified results)"
-            echo "- or \`OPENAI_API_KEY\` / \`OLLAMA_API_KEY\`"
-            echo
-            echo "Docs: https://github.com/Naveja00/OverReach#ci-gate-github-action"
-          } > "$RUNNER_TEMP/comment.md"
 
       - name: Post / update PR comment
         if: always() && github.event_name == 'pull_request'

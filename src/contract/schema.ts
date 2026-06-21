@@ -8,7 +8,7 @@
 // once a registry/persistence layer exists (v2). For now the contract is a pure
 // JSON artifact + a narrowing validator.
 
-import type { Scope } from "../types.js";
+import type { Scope, CreepScore } from "../types.js";
 import { createHash } from "node:crypto";
 
 export interface PriorDecision {
@@ -16,6 +16,20 @@ export interface PriorDecision {
   why: string;
   by: string;
   at: string; // ISO timestamp
+}
+
+// One link in the delegation chain. Every ancestor's work is summarized here
+// so any agent in the chain has full project context — Agent H knows what
+// A, B, C, ... all did before it.
+export interface DelegationLink {
+  contract_id: string;
+  agent: string;           // who did this work (agent name/id)
+  task: string;            // the instruction this agent was given
+  scope_summary: string;   // one-line summary of what was authorized
+  files_touched: string[]; // files this agent's diff changed
+  findings_count: number;  // how many findings at this level
+  score: CreepScore;       // scope_creep_score at this level
+  at: string;              // ISO timestamp
 }
 
 export interface ExecutionContract {
@@ -40,6 +54,9 @@ export interface ExecutionContract {
     project_goal?: string;
     constraints?: string[];
     prior_decisions?: PriorDecision[];
+    // The full delegation chain — every ancestor's work summarized so any
+    // downstream agent has complete project context. Agent H sees A→B→...→G.
+    chain?: DelegationLink[];
   };
 
   // AUDIT — chain of evidence. NOTE: only the prompt_hash is stored, NEVER the
@@ -66,15 +83,16 @@ export function hashPrompt(prompt: string): string {
 
 export interface BuildContractInput {
   prompt: string;
-  diff: string; // the diff the contract is being issued against (for the id)
+  diff: string;
   scope: Scope;
   model: string;
   reconcileChanged: boolean;
   findingsAtIssue: number;
-  parentContractId?: string;
+  parentContract?: ExecutionContract;
   identity?: Partial<ExecutionContract["identity"]>;
   context?: Partial<ExecutionContract["context"]>;
   expiresAt?: string;
+  agentName?: string;
 }
 
 // Deterministic contract id: same (prompt + diff + parent + version) always
@@ -87,28 +105,58 @@ export function contractId(prompt: string, diff: string, parentContractId: strin
 }
 
 export function buildContract(input: BuildContractInput): ExecutionContract {
+  // Build the delegation chain: inherit parent's chain + add parent as a link
+  let chain: DelegationLink[] | undefined;
+  if (input.parentContract) {
+    const parentChain = input.parentContract.context.chain ?? [];
+    const parentLink: DelegationLink = {
+      contract_id: input.parentContract.id,
+      agent: input.parentContract.identity.issuing_agent ?? "unknown",
+      task: `[prompt_hash:${input.parentContract.audit.prompt_hash}]`,
+      scope_summary: summarizeScope(input.parentContract.authorization),
+      files_touched: [],
+      findings_count: input.parentContract.audit.findings_at_issue,
+      score: input.parentContract.audit.findings_at_issue > 0 ? "HIGH" as CreepScore : "LOW" as CreepScore,
+      at: input.parentContract.issued_at,
+    };
+    chain = [...parentChain, parentLink];
+  } else if (input.context?.chain) {
+    chain = input.context.chain;
+  }
+
   return {
     version: "1.0",
-    id: contractId(input.prompt, input.diff, input.parentContractId, "1.0"),
+    id: contractId(input.prompt, input.diff, input.parentContract?.id, "1.0"),
     issued_at: new Date().toISOString(),
     expires_at: input.expiresAt,
     identity: {
       root_human: input.identity?.root_human ?? "user",
-      issuing_agent: input.identity?.issuing_agent,
+      issuing_agent: input.identity?.issuing_agent ?? input.agentName,
       target_agent: input.identity?.target_agent,
     },
     authorization: input.scope,
     context: {
-      project_goal: input.context?.project_goal,
-      constraints: input.context?.constraints,
-      prior_decisions: input.context?.prior_decisions,
+      project_goal: input.context?.project_goal ?? input.parentContract?.context.project_goal,
+      constraints: input.context?.constraints ?? input.parentContract?.context.constraints,
+      prior_decisions: input.context?.prior_decisions ?? input.parentContract?.context.prior_decisions,
+      chain,
     },
     audit: {
       prompt_hash: hashPrompt(input.prompt),
       scope_extraction_model: input.model,
       reconcile_changed: input.reconcileChanged,
       findings_at_issue: input.findingsAtIssue,
-      parent_contract_id: input.parentContractId,
+      parent_contract_id: input.parentContract?.id,
     },
   };
+}
+
+function summarizeScope(scope: Scope): string {
+  const parts: string[] = [];
+  if (scope.files_allowed.length) parts.push(`${scope.files_allowed.length} files`);
+  if (scope.features_allowed.length) parts.push(`${scope.features_allowed.length} features`);
+  if (scope.endpoints_allowed.length) parts.push(`${scope.endpoints_allowed.length} endpoints`);
+  if (scope.deps_allowed.length) parts.push(`${scope.deps_allowed.length} deps`);
+  if (scope.env_allowed.length) parts.push(`${scope.env_allowed.length} env vars`);
+  return parts.length ? parts.join(", ") : "open scope";
 }

@@ -35,35 +35,52 @@ const c = (fn: (s: string) => string) => (useColor ? fn : (s: string) => s);
 
 interface Args {
   prompt?: string;
+  promptFile?: string;
   diffPath?: string;
   scopePath?: string;
+  parentContractPath?: string;
+  agentName?: string;
+  expires?: string;
   json: boolean;
   emitContract: boolean;
   noCache: boolean;
+  ledgerAppend: boolean;
   demo: boolean;
   init: boolean;
+  ledger: boolean;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { json: false, emitContract: false, noCache: false, demo: false, init: false, help: false };
+  const a: Args = { json: false, emitContract: false, noCache: false, ledgerAppend: false, demo: false, init: false, ledger: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = () => argv[++i];
     switch (arg) {
       case "-h": case "--help": a.help = true; break;
       case "-p": case "--prompt": a.prompt = next(); break;
+      case "--prompt-file": a.promptFile = next(); break;
       case "-d": case "--diff": a.diffPath = next(); break;
       case "--scope": a.scopePath = next(); break;
       case "--json": a.json = true; break;
       case "--emit-contract": a.emitContract = true; break;
       case "--no-cache": a.noCache = true; break;
+      case "--parent-contract": a.parentContractPath = next(); break;
+      case "--agent-name": a.agentName = next(); break;
+      case "--expires": a.expires = next(); break;
+      case "--ledger-append": a.ledgerAppend = true; break;
       case "demo": a.demo = true; break;
       case "init": a.init = true; break;
+      case "ledger": a.ledger = true; break;
+      case "status": break;
       default:
         if (arg.startsWith("--prompt=")) a.prompt = arg.slice("--prompt=".length);
+        else if (arg.startsWith("--prompt-file=")) a.promptFile = arg.slice("--prompt-file=".length);
         else if (arg.startsWith("--diff=")) a.diffPath = arg.slice("--diff=".length);
         else if (arg.startsWith("--scope=")) a.scopePath = arg.slice("--scope=".length);
+        else if (arg.startsWith("--parent-contract=")) a.parentContractPath = arg.slice("--parent-contract=".length);
+        else if (arg.startsWith("--agent-name=")) a.agentName = arg.slice("--agent-name=".length);
+        else if (arg.startsWith("--expires=")) a.expires = arg.slice("--expires=".length);
         else { console.error(`unknown argument: ${arg}`); process.exit(2); }
     }
   }
@@ -80,15 +97,21 @@ Usage:
   overreach init                                    install pre-commit hook
   overreach --prompt "..." --json                  raw JSON for piping/CI
 
+Agent-to-agent:
+  overreach --prompt "..." --emit-contract --json > contract.json
+  overreach --prompt "child task" --parent-contract contract.json --agent-name "agent-b"
+
 Options:
-  -p, --prompt <text>   the instruction that authorized the work
-  -d, --diff <path>     diff file (default: read from stdin)
-  --scope <path|json>   inject authorized scope; skips the LLM entirely (zero-key)
-  --json                emit raw JSON instead of pretty terminal output
-  --emit-contract       include the versioned execution contract in output
-  --no-cache            bypass the scope cache (force a fresh Stage 1 call)
-  demo                  run the canonical login-form-smuggles-Stripe demo
-  init                  install a git pre-commit hook + .overreach/prompt.md
+  -p, --prompt <text>          the instruction that authorized the work
+  -d, --diff <path>            diff file (default: read from stdin)
+  --scope <path|json>          inject authorized scope; skips the LLM entirely
+  --json                       emit raw JSON instead of pretty terminal output
+  --emit-contract              include the versioned execution contract in output
+  --parent-contract <path>     parent contract JSON (validates child narrows parent)
+  --agent-name <name>          name of the agent executing this work (for chain)
+  --no-cache                   bypass the scope cache (force a fresh Stage 1 call)
+  demo                         run the canonical login-form-smuggles-Stripe demo
+  init                         install a git pre-commit hook + .overreach/prompt.md
 
 Resolution: anthropic key > openai key > ollama (local, keyless). Override with
 SCOPE_PROVIDER. Pin a model with OVERREACH_MODEL. Stage 1 scope is cached by
@@ -198,6 +221,39 @@ async function main() {
   // ── init ─────────────────────────────────────────────────────────────────
   if (args.init) { runInit(); return; }
 
+  // ── ledger ──────────────────────────────────────────────────────────────
+  if (args.ledger) {
+    const { readLedger, formatLedgerForAgent } = await import("./ledger.js");
+    const { execSync } = await import("node:child_process");
+    let root: string;
+    try { root = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim(); }
+    catch { console.error("Not a git repository."); process.exit(1); }
+    const entries = readLedger(root);
+    if (args.json) {
+      console.log(JSON.stringify(entries, null, 2));
+    } else {
+      console.log(formatLedgerForAgent(entries));
+    }
+    return;
+  }
+
+  // ── status ─────────────────────────────────────────────────────────────
+  if (process.argv[2] === "status") {
+    const { readLedger, formatLedgerForAgent } = await import("./ledger.js");
+    const { readClaims, formatClaims } = await import("./claims.js");
+    const { execSync } = await import("node:child_process");
+    let root: string;
+    try { root = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim(); }
+    catch { console.error("Not a git repository."); process.exit(1); }
+    console.log(c(ANSI.bold)("Overreach — project status\n"));
+    console.log(c(ANSI.bold)("File claims:"));
+    console.log(formatClaims(readClaims(root)));
+    console.log("");
+    console.log(c(ANSI.bold)("Ledger:"));
+    console.log(formatLedgerForAgent(readLedger(root)));
+    return;
+  }
+
   // ── demo ─────────────────────────────────────────────────────────────────
   if (args.demo) {
     const result = await checkOverreach(DEMO_PROMPT, DEMO_DIFF, { scopeOverride: DEMO_SCOPE });
@@ -211,7 +267,11 @@ async function main() {
   }
 
   // ── real run ─────────────────────────────────────────────────────────────
-  if (!args.prompt) { console.error("--prompt is required (or use `overreach demo`)"); process.exit(2); }
+  if (args.promptFile) {
+    if (!existsSync(args.promptFile)) { console.error(`prompt file not found: ${args.promptFile}`); process.exit(2); }
+    args.prompt = readFileSync(args.promptFile, "utf-8").trim();
+  }
+  if (!args.prompt) { console.error("--prompt or --prompt-file is required (or use `overreach demo`)"); process.exit(2); }
   const prompt = args.prompt;
   const diff = await readDiff(args.diffPath);
 
@@ -235,7 +295,18 @@ async function main() {
 
   const options: Parameters<typeof checkOverreach>[2] = {};
   if (scopeOverride) options.scopeOverride = scopeOverride;
-  if (args.emitContract) options.emitContract = true;
+  if (args.emitContract || args.parentContractPath || args.expires) options.emitContract = true;
+  if (args.agentName) options.agentName = args.agentName;
+  if (args.expires) options.expiresAt = args.expires;
+  if (args.parentContractPath) {
+    if (!existsSync(args.parentContractPath)) { console.error(`parent contract not found: ${args.parentContractPath}`); process.exit(2); }
+    try {
+      options.parentContract = JSON.parse(readFileSync(args.parentContractPath, "utf-8"));
+    } catch {
+      console.error("--parent-contract must be a valid JSON file");
+      process.exit(2);
+    }
+  }
 
   const result = await checkOverreach(prompt, diff, options);
 
@@ -258,6 +329,17 @@ async function main() {
     console.log(JSON.stringify(out, null, 2));
   } else {
     console.log(pretty(result, meta));
+  }
+
+  if (args.ledgerAppend && result.scope_creep_score !== "HIGH") {
+    try {
+      const { appendLedger } = await import("./ledger.js");
+      const { execSync } = await import("node:child_process");
+      const root = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
+      const agent = args.agentName || "pre-commit";
+      const task = prompt.length > 100 ? prompt.slice(0, 100) + "..." : prompt;
+      appendLedger(root, result, agent, task);
+    } catch {}
   }
 
   process.exit(result.scope_creep_score === "HIGH" ? 1 : 0);

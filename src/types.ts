@@ -2,7 +2,7 @@
 
 import type { ExecutionContract } from "./contract/schema.js";
 import type { NarrowingResult } from "./contract/narrow.js";
-export type { ExecutionContract, PriorDecision } from "./contract/schema.js";
+export type { ExecutionContract, PriorDecision, DelegationLink } from "./contract/schema.js";
 export type { NarrowingResult } from "./contract/narrow.js";
 
 // Every external-facing schema is versioned from day one (hardening item #1).
@@ -113,4 +113,8 @@ export interface CheckOptions {
   // If provided, the emitted contract is treated as a child of this parent and
   // validated to only NARROW the parent's authorization (never expand).
   parentContract?: ExecutionContract;
+  // Name of the agent executing this work (for the delegation chain).
+  agentName?: string;
+  // ISO timestamp or duration (e.g. "30m", "2h") for contract expiration.
+  expiresAt?: string;
 }

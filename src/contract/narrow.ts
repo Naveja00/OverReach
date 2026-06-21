@@ -20,13 +20,15 @@ import type { ExecutionContract } from "./schema.js";
 
 const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-const AUTH_KEYS: (keyof Scope)[] = [
+// Only gate narrowing on concrete/machine-checkable fields. Features and
+// behavioral changes are semantic — "password validation" is a valid narrowing
+// of "form validation" but fails string equality. Soft fields are excluded from
+// narrowing to avoid false expansions on legitimate delegations.
+const NARROWING_KEYS: (keyof Scope)[] = [
   "files_allowed",
-  "features_allowed",
   "endpoints_allowed",
   "deps_allowed",
   "env_allowed",
-  "behavioral_changes_allowed",
 ];
 
 // A parent is "concrete" if it names at least one machine-checkable authorization
@@ -53,7 +55,7 @@ export function isNarrower(child: ExecutionContract, parent: ExecutionContract):
   const parentConcrete = parentIsConcrete(parent);
   const expansions: NarrowingExpansion[] = [];
 
-  for (const key of AUTH_KEYS) {
+  for (const key of NARROWING_KEYS) {
     const parentSet = new Set((parent.authorization[key] || []).map(norm));
     for (const item of child.authorization[key] || []) {
       if (!parentSet.has(norm(item))) {
@@ -63,7 +65,7 @@ export function isNarrower(child: ExecutionContract, parent: ExecutionContract):
   }
 
   return {
-    parentContractId: parent.audit.parent_contract_id ? undefined : parent.id,
+    parentContractId: parent.id,
     parentConcrete,
     narrow: expansions.length === 0,
     expansions,

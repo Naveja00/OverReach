@@ -46,9 +46,8 @@ if [ ! -f "$PROMPT_FILE" ]; then
   echo "[overreach] No .overreach/prompt.md found — skipping scope audit."
   echo "[overreach] Run 'npx -y -p overreach overreach-cli init' to set up."
 else
-  PROMPT=$(cat "$PROMPT_FILE")
   # Skip if the prompt file is still the template (no real prompt written)
-  if echo "$PROMPT" | grep -q "^# Overreach"; then
+  if head -1 "$PROMPT_FILE" | grep -q "^# Overreach"; then
     echo "[overreach] .overreach/prompt.md is still the template — skipping."
     echo "[overreach] Edit it with your actual prompt to enable the scope audit."
   else
@@ -57,7 +56,8 @@ else
       echo "[overreach] No staged changes — skipping scope audit."
     else
       echo "[overreach] Auditing staged changes against .overreach/prompt.md..."
-      echo "$DIFF" | npx -y -p overreach overreach-cli --prompt "$PROMPT"
+      AGENT_NAME=\${OVERREACH_AGENT_NAME:-pre-commit}
+      echo "$DIFF" | npx -y -p overreach overreach-cli --prompt-file "$PROMPT_FILE" --agent-name "$AGENT_NAME" --ledger-append
       EXIT_CODE=$?
       if [ $EXIT_CODE -eq 1 ]; then
         echo ""
@@ -135,7 +135,7 @@ export function runInit(): void {
   const CLAUDE_MARKER = "<!-- overreach -->";
   const CLAUDE_BLOCK = `
 ${CLAUDE_MARKER}
-## Scope audit
+## Scope audit (Overreach)
 
 Before committing, audit your staged changes against the task prompt:
 
@@ -145,6 +145,14 @@ git diff --staged | npx -y -p overreach overreach-cli --prompt "<the task you we
 
 If \`scope_creep_score\` is HIGH, remove the unauthorized changes before committing.
 Do not add dependencies, env vars, endpoints, or cron jobs the prompt did not ask for.
+
+### Multi-agent coordination
+Before starting work, check for conflicts with other agents:
+- Read the ledger: \`overreach ledger\` to see what other agents have done
+- Check conflicts: call the \`check_conflicts\` MCP tool with your intended files
+- Claim files: call \`claim_files\` before editing to prevent collisions
+- Release claims: call \`release_files\` when done
+- The pre-commit hook auto-logs your work to \`.overreach/ledger.json\`
 ${CLAUDE_MARKER}
 `;
 
@@ -158,6 +166,86 @@ ${CLAUDE_MARKER}
   } else {
     writeFileSync(claudeMdFile, CLAUDE_BLOCK.trimStart(), "utf-8");
     createdClaudeMd = true;
+  }
+
+  // 4. .cursorrules — same instruction for Cursor users
+  const cursorRulesFile = join(gitRoot, ".cursorrules");
+  const CURSOR_MARKER = "# >>> overreach";
+  const CURSOR_BLOCK = `
+${CURSOR_MARKER}
+# Scope audit (Overreach)
+# Before committing, audit your staged changes against the task prompt:
+#   git diff --staged | npx -y -p overreach overreach-cli --prompt "<the task you were given>"
+# If scope_creep_score is HIGH, remove the unauthorized changes before committing.
+# Do not add dependencies, env vars, endpoints, or cron jobs the prompt did not ask for.
+# Multi-agent: call check_conflicts before starting work to avoid file collisions.
+# After committing: the pre-commit hook auto-logs your work to .overreach/ledger.json.
+${CURSOR_MARKER}
+`;
+  let createdCursorRules = false;
+  if (existsSync(cursorRulesFile)) {
+    const existing = readFileSync(cursorRulesFile, "utf-8");
+    if (!existing.includes(CURSOR_MARKER)) {
+      const content = existing.endsWith("\n") ? existing : existing + "\n";
+      writeFileSync(cursorRulesFile, content + CURSOR_BLOCK, "utf-8");
+      createdCursorRules = true;
+    }
+  } else {
+    writeFileSync(cursorRulesFile, CURSOR_BLOCK.trimStart(), "utf-8");
+    createdCursorRules = true;
+  }
+
+  // 5. codex.md — instruction for OpenAI Codex
+  const codexFile = join(gitRoot, "codex.md");
+  const CODEX_MARKER = "<!-- overreach -->";
+  const CODEX_BLOCK = `
+${CODEX_MARKER}
+## Scope audit (Overreach)
+
+Before committing, audit your staged changes against the task prompt:
+
+\`\`\`
+git diff --staged | npx -y -p overreach overreach-cli --prompt "<the task you were given>"
+\`\`\`
+
+If \`scope_creep_score\` is HIGH, remove the unauthorized changes before committing.
+Do not add dependencies, env vars, endpoints, or cron jobs the prompt did not ask for.
+Multi-agent: call check_conflicts before starting work to avoid file collisions.
+After committing: the pre-commit hook auto-logs your work to .overreach/ledger.json.
+${CODEX_MARKER}
+`;
+  let createdCodex = false;
+  if (existsSync(codexFile)) {
+    const existing = readFileSync(codexFile, "utf-8");
+    if (!existing.includes(CODEX_MARKER)) {
+      const content = existing.endsWith("\n") ? existing : existing + "\n";
+      writeFileSync(codexFile, content + CODEX_BLOCK, "utf-8");
+      createdCodex = true;
+    }
+  } else {
+    writeFileSync(codexFile, CODEX_BLOCK.trimStart(), "utf-8");
+    createdCodex = true;
+  }
+
+  // 6. .overreach/config.json — agent-agnostic config that any vendor can read
+  const configFile = join(overreachDir, "config.json");
+  let createdConfig = false;
+  if (!existsSync(configFile)) {
+    writeFileSync(configFile, JSON.stringify({
+      version: "1.0",
+      coordination: {
+        ledger: ".overreach/ledger.json",
+        claims: ".overreach/claims.json",
+        prompt: ".overreach/prompt.md",
+      },
+      rules: {
+        claim_before_editing: true,
+        check_conflicts_before_start: true,
+        auto_log_to_ledger: true,
+        default_claim_duration: "2h",
+      },
+    }, null, 2) + "\n", "utf-8");
+    createdConfig = true;
   }
 
   // Summary
@@ -178,9 +266,30 @@ ${CLAUDE_MARKER}
 
   if (createdClaudeMd) {
     console.log(c(ANSI.green)("  ✓ Added scope audit instruction to CLAUDE.md"));
-    console.log(c(ANSI.dim)("    AI agents (Claude Code, Cursor, Codex) will self-audit before committing.\n"));
+    console.log(c(ANSI.dim)("    Claude Code / Claude agents will self-audit before committing.\n"));
   } else {
     console.log(c(ANSI.dim)("  · CLAUDE.md already has Overreach instruction\n"));
+  }
+
+  if (createdCursorRules) {
+    console.log(c(ANSI.green)("  ✓ Added scope audit instruction to .cursorrules"));
+    console.log(c(ANSI.dim)("    Cursor agents will self-audit before committing.\n"));
+  } else {
+    console.log(c(ANSI.dim)("  · .cursorrules already has Overreach instruction\n"));
+  }
+
+  if (createdCodex) {
+    console.log(c(ANSI.green)("  ✓ Added scope audit instruction to codex.md"));
+    console.log(c(ANSI.dim)("    OpenAI Codex agents will self-audit before committing.\n"));
+  } else {
+    console.log(c(ANSI.dim)("  · codex.md already has Overreach instruction\n"));
+  }
+
+  if (createdConfig) {
+    console.log(c(ANSI.green)("  ✓ Created .overreach/config.json"));
+    console.log(c(ANSI.dim)("    Cross-vendor coordination config (claims, ledger, rules).\n"));
+  } else {
+    console.log(c(ANSI.dim)("  · .overreach/config.json already exists\n"));
   }
 
   console.log(c(ANSI.bold)("Next steps:"));
@@ -189,4 +298,8 @@ ${CLAUDE_MARKER}
   console.log(`  3. Optional: set an API key for better scope extraction`);
   console.log(c(ANSI.dim)("     (ANTHROPIC_API_KEY / OPENAI_API_KEY / OLLAMA_API_KEY)"));
   console.log(c(ANSI.dim)("     Without a key, deterministic mode extracts concrete items from your prompt.\n"));
+  console.log(c(ANSI.bold)("Multi-agent:"));
+  console.log(`  Agents should call ${c(ANSI.yellow)("check_conflicts")} before starting work`);
+  console.log(`  and ${c(ANSI.yellow)("claim_files")} to prevent file collisions.`);
+  console.log(c(ANSI.dim)("  Works across Claude Code, Cursor, Codex — any agent that reads MCP tools.\n"));
 }

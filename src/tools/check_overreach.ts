@@ -15,6 +15,16 @@ import { resolveProvider, resolveModel } from "../config.js";
 import { buildContract } from "../contract/schema.js";
 import { isNarrower } from "../contract/narrow.js";
 
+function resolveExpiry(input: string): string {
+  const dur = input.match(/^(\d+)(m|h|d)$/);
+  if (dur) {
+    const [, n, unit] = dur;
+    const ms = { m: 60_000, h: 3_600_000, d: 86_400_000 }[unit]!;
+    return new Date(Date.now() + parseInt(n) * ms).toISOString();
+  }
+  return input; // assume ISO timestamp
+}
+
 export async function checkOverreach(
   prompt: string,
   diff: string,
@@ -78,26 +88,42 @@ export async function checkOverreach(
       model,
       reconcileChanged: telemetry?.reconcileChanged ?? false,
       findingsAtIssue: findings.length,
-      parentContractId: options.parentContract?.id,
+      parentContract: options.parentContract,
+      agentName: options.agentName,
+      expiresAt: options.expiresAt ? resolveExpiry(options.expiresAt) : undefined,
     });
     result.contract = contract;
+    // Expiration check — a stale/abandoned agent should not keep committing
+    // under an expired contract.
+    if (options.parentContract?.expires_at) {
+      const now = new Date();
+      const expires = new Date(options.parentContract.expires_at);
+      if (now > expires) {
+        const f: Finding = {
+          kind: "contract.expired",
+          detail: `Parent contract ${options.parentContract.id.slice(0, 8)} expired at ${options.parentContract.expires_at}. This agent may be stale or abandoned.`,
+          file: "contract",
+          severity: "high",
+          evidence: `expired ${Math.round((now.getTime() - expires.getTime()) / 60000)}min ago`,
+        };
+        findings.push(f);
+        score = "HIGH";
+        result.scope_creep_score = score;
+      }
+    }
+
     if (options.parentContract) {
       const narrowing = isNarrower(contract, options.parentContract);
       result.contractNarrowing = narrowing;
-      // A narrowing violation against a CONCRETE parent is a hard finding
-      // (contract.expansion, high severity). Against a vague parent the check
-      // is advisory — no finding, so we don't false-block on under-specified roots.
       if (!narrowing.advisory && narrowing.expansions.length > 0) {
         for (const exp of narrowing.expansions) {
-          const f: Finding = {
+          findings.push({
             kind: "contract.expansion",
             detail: `Child contract expands parent authorization: "${exp.item}" added to ${exp.field} (parent did not authorize it).`,
             file: "contract",
             severity: "high",
             evidence: `${exp.field}+=${exp.item}`,
-          };
-          findings.push(f);
-          result.findings.push(f);
+          });
         }
         score = "HIGH";
         result.scope_creep_score = score;

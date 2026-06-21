@@ -41,11 +41,10 @@ export interface HandoffResult {
 }
 
 export interface ValidateHandoffOptions {
-  // The agent's stated reasoning (for check 3). Optional — without it the
-  // reasoning check is skipped (still stubbed).
   statedReasoning?: string;
-  // Emit a child contract in the result (default true — handoffs issue contracts).
   emitContract?: boolean;
+  agentName?: string;
+  expiresAt?: string;
 }
 
 // Check 2 — context consistency. STUB: wired shape, no LLM call yet.
@@ -70,6 +69,8 @@ export async function validateHandoff(
   const scopeCheck = await checkOverreach(instruction, diff, {
     emitContract: options.emitContract ?? true,
     parentContract,
+    agentName: options.agentName,
+    expiresAt: options.expiresAt,
   });
 
   // Checks 2 & 3 — advisory, stubbed.

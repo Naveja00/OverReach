@@ -255,7 +255,151 @@ async function main() {
     ok("scope has exactly the 6 frozen fields", scopeKeys.length === 6 && ["behavioral_changes_allowed","deps_allowed","endpoints_allowed","env_allowed","features_allowed","files_allowed"].every((k) => scopeKeys.includes(k)), JSON.stringify(scopeKeys));
   }
 
-  // ââ Summary âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ”€â”€
+
+  // -- [13] Handoff: child narrows parent ----------------------------------------
+  console.log("\n[13] handoff: child narrows parent (login form -> password validation)");
+  {
+    const parentScope: Scope = {
+      files_allowed: ["src/components/settings.tsx"],
+      features_allowed: ["login form", "form validation", "submit button"],
+      endpoints_allowed: ["/api/auth/login"],
+      deps_allowed: [],
+      env_allowed: [],
+      behavioral_changes_allowed: [],
+    };
+    const parentResult = await checkOverreach(
+      "add a login form to the settings page with email/password fields, form validation, and a submit button that calls /api/auth/login",
+      load("tests/fixtures/clean_scope.diff"),
+      { scopeOverride: parentScope, emitContract: true, agentName: "agent-a" }
+    );
+    ok("parent contract emitted", !!parentResult.contract);
+    const childScope: Scope = {
+      files_allowed: ["src/components/settings.tsx"],
+      features_allowed: ["password validation"],
+      endpoints_allowed: [],
+      deps_allowed: [],
+      env_allowed: [],
+      behavioral_changes_allowed: [],
+    };
+    const childResult = await checkOverreach(
+      "add password validation to the login form",
+      load("tests/fixtures/clean_scope.diff"),
+      { scopeOverride: childScope, emitContract: true, parentContract: parentResult.contract!, agentName: "agent-b" }
+    );
+    ok("child narrows parent (no expansion)", childResult.contractNarrowing?.narrow === true);
+    ok("child contract has delegation chain", !!childResult.contract?.context.chain);
+    ok("chain includes parent agent", childResult.contract?.context.chain?.[0]?.agent === "agent-a");
+    ok("decision is not HIGH", childResult.scope_creep_score !== "HIGH");
+  }
+
+  // -- [14] Handoff: child expands parent ---------------------------------------
+  console.log("\n[14] handoff: child expands parent (adds stripe the parent never authorized)");
+  {
+    const parentScope: Scope = {
+      files_allowed: ["src/components/settings.tsx"],
+      features_allowed: ["login form"],
+      endpoints_allowed: ["/api/auth/login"],
+      deps_allowed: [],
+      env_allowed: [],
+      behavioral_changes_allowed: [],
+    };
+    const parentResult = await checkOverreach("add a login form", load("tests/fixtures/clean_scope.diff"), { scopeOverride: parentScope, emitContract: true, agentName: "parent" });
+    const childResult = await checkOverreach(
+      "add a login form to the settings page",
+      load("tests/fixtures/login_form_stripe.diff"),
+      { scopeOverride: { files_allowed: ["src/components/settings.tsx","src/lib/stripe.ts","src/app/api/checkout/route.ts","package.json",".env.local","src/app/api/cron/cleanup/route.ts"], features_allowed: ["login form","stripe integration"], endpoints_allowed: ["/api/auth/login","/api/checkout","/api/cron/cleanup"], deps_allowed: ["stripe","@stripe/stripe-js"], env_allowed: ["STRIPE_SECRET","STRIPE_WEBHOOK_SECRET"], behavioral_changes_allowed: [] }, emitContract: true, parentContract: parentResult.contract!, agentName: "child" }
+    );
+    ok("child expansion detected", childResult.contractNarrowing?.expansions && childResult.contractNarrowing.expansions.length > 0);
+    ok("expansion count >= 4", (childResult.contractNarrowing?.expansions?.length ?? 0) >= 4);
+    ok("score is HIGH on expansion", childResult.scope_creep_score === "HIGH");
+    ok("findings include contract.expansion", childResult.findings.some(f => f.kind === "contract.expansion"));
+  }
+
+  // -- [15] Chain propagation: 3-agent delegation (A -> B -> C) -----------------
+  console.log("\n[15] chain propagation: 3-agent delegation (A -> B -> C)");
+  {
+    const scopeA: Scope = { files_allowed: ["src/components/settings.tsx"], features_allowed: ["login form", "form validation"], endpoints_allowed: ["/api/auth/login"], deps_allowed: [], env_allowed: [], behavioral_changes_allowed: [] };
+    const resultA = await checkOverreach("add a login form with validation", load("tests/fixtures/clean_scope.diff"), { scopeOverride: scopeA, emitContract: true, agentName: "agent-a" });
+    const scopeB: Scope = { files_allowed: ["src/components/settings.tsx"], features_allowed: ["form validation"], endpoints_allowed: [], deps_allowed: [], env_allowed: [], behavioral_changes_allowed: [] };
+    const resultB = await checkOverreach("add form validation", load("tests/fixtures/clean_scope.diff"), { scopeOverride: scopeB, emitContract: true, parentContract: resultA.contract!, agentName: "agent-b" });
+    ok("B narrows A", resultB.contractNarrowing?.narrow === true);
+    ok("B chain length = 1", resultB.contract?.context.chain?.length === 1);
+    const scopeC: Scope = { files_allowed: ["src/components/settings.tsx"], features_allowed: ["password validation"], endpoints_allowed: [], deps_allowed: [], env_allowed: [], behavioral_changes_allowed: [] };
+    const resultC = await checkOverreach("add bcrypt password hashing", load("tests/fixtures/clean_scope.diff"), { scopeOverride: scopeC, emitContract: true, parentContract: resultB.contract!, agentName: "agent-c" });
+    ok("C narrows B", resultC.contractNarrowing?.narrow === true);
+    ok("C chain length = 2 (sees A and B)", resultC.contract?.context.chain?.length === 2);
+    ok("C chain[0] is agent-a", resultC.contract?.context.chain?.[0]?.agent === "agent-a");
+    ok("C chain[1] is agent-b", resultC.contract?.context.chain?.[1]?.agent === "agent-b");
+  }
+
+  // -- [16] Contract expiration -------------------------------------------------
+  console.log("\n[16] contract expiration: expired parent contract flags HIGH");
+  {
+    const parentScope: Scope = { files_allowed: ["src/app.ts"], features_allowed: ["setup"], endpoints_allowed: [], deps_allowed: [], env_allowed: [], behavioral_changes_allowed: [] };
+    const parentResult = await checkOverreach("set up the app", load("tests/fixtures/clean_scope.diff"), { scopeOverride: parentScope, emitContract: true, expiresAt: "30m", agentName: "parent" });
+    ok("parent contract has expires_at", !!parentResult.contract?.expires_at);
+    const expiredParent = { ...parentResult.contract! };
+    expiredParent.expires_at = new Date(Date.now() - 60_000).toISOString();
+    const childResult = await checkOverreach("continue setup", load("tests/fixtures/clean_scope.diff"), { scopeOverride: parentScope, emitContract: true, parentContract: expiredParent, agentName: "stale-child" });
+    ok("expired contract detected", childResult.findings.some(f => f.kind === "contract.expired"));
+    ok("score is HIGH on expiration", childResult.scope_creep_score === "HIGH");
+  }
+
+  // -- [17] File claims system --------------------------------------------------
+  console.log("\n[17] file claims: claim, conflict detection, release");
+  {
+    const { claimFiles, releaseClaims, checkConflicts } = await import("../src/claims.js");
+    const { appendLedger, readLedger } = await import("../src/ledger.js");
+    const { mkdirSync, rmSync, existsSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const tmpRoot = join(process.cwd(), ".test-claims-tmp");
+    if (existsSync(tmpRoot)) rmSync(tmpRoot, { recursive: true });
+    mkdirSync(join(tmpRoot, ".overreach"), { recursive: true });
+    const r1 = claimFiles(tmpRoot, ["src/auth.ts", "src/db.ts"], "agent-a", "add login", "1h");
+    ok("agent-a claims 2 files", r1.claimed.length === 2 && r1.conflicts.length === 0);
+    const r2 = claimFiles(tmpRoot, ["src/auth.ts", "src/utils.ts"], "agent-b", "add utils");
+    ok("agent-b gets conflict on auth.ts", r2.conflicts.length === 1 && r2.conflicts[0].file === "src/auth.ts");
+    ok("agent-b claims utils.ts without conflict", r2.claimed.includes("src/utils.ts"));
+    const conflicts = checkConflicts(tmpRoot, ["src/auth.ts", "src/new.ts"], "agent-b");
+    ok("conflict check detects auth.ts held by agent-a", conflicts.has_conflicts && conflicts.conflicts[0].claimed_by === "agent-a");
+    const released = releaseClaims(tmpRoot, "agent-a");
+    ok("agent-a releases 2 claims", released === 2);
+    const r3 = claimFiles(tmpRoot, ["src/auth.ts"], "agent-b", "take over auth");
+    ok("agent-b claims auth.ts after release", r3.claimed.length === 1 && r3.conflicts.length === 0);
+    const fakeResult: any = {
+      schema_version: "1.0",
+      scope: { files_allowed: [], features_allowed: [], endpoints_allowed: [], deps_allowed: [], env_allowed: [], behavioral_changes_allowed: [] },
+      actual: { files_changed: ["src/auth.ts", "src/db.ts"], symbols_added: [], imports_added: [], env_vars_added: [], endpoints_added: [], cron_added: [], new_deps: [] },
+      findings: [],
+      scope_creep_score: "LOW",
+      summary: "clean",
+    };
+    appendLedger(tmpRoot, fakeResult, "agent-a", "add login flow");
+    const ledger = readLedger(tmpRoot);
+    ok("ledger records 1 entry", ledger.length === 1);
+    ok("ledger entry has correct files", ledger[0].files_touched.includes("src/auth.ts"));
+    const ledgerConflicts = checkConflicts(tmpRoot, ["src/auth.ts"], "agent-b", ledger);
+    ok("recent touches shows agent-a touched auth.ts", ledgerConflicts.recent_touches.length === 1);
+    rmSync(tmpRoot, { recursive: true });
+  }
+
+  // -- [18] File-level ledger queries -------------------------------------------
+  console.log("\n[18] ledger queries: by file, by agent, ownership map");
+  {
+    const { queryByFile, queryByAgent, fileOwnershipMap } = await import("../src/ledger.js");
+    const entries: any[] = [
+      { agent: "claude", task: "add auth", files_touched: ["src/auth.ts", "src/db.ts"], findings_count: 0, score: "LOW", at: new Date().toISOString() },
+      { agent: "cursor", task: "add utils", files_touched: ["src/utils.ts", "src/auth.ts"], findings_count: 1, score: "MEDIUM", at: new Date().toISOString() },
+      { agent: "codex", task: "add tests", files_touched: ["tests/auth.test.ts"], findings_count: 0, score: "LOW", at: new Date().toISOString() },
+    ];
+    ok("queryByFile finds 2 agents touched auth.ts", queryByFile(entries, "src/auth.ts").length === 2);
+    ok("queryByAgent finds cursor work", queryByAgent(entries, "cursor").length === 1);
+    const ownership = fileOwnershipMap(entries);
+    ok("ownership map: auth.ts touched by 2 agents", ownership["src/auth.ts"]?.length === 2);
+    ok("ownership map: tests only by codex", ownership["tests/auth.test.ts"]?.length === 1 && ownership["tests/auth.test.ts"][0].agent === "codex");
+  }
+
+  // -- Summary ------------------------------------------------------------------
   console.log(`\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`);
   console.log(`  ${passes} passed, ${failures} failed`);
   console.log(`â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`);

@@ -139,7 +139,11 @@ function cron(code: string): string | null {
     code.match(/cron\.\w+\(/) ||
     code.match(/@scheduler\./) ||
     code.match(/schedule\.every/) ||
-    code.match(/BackgroundScheduler/) ||
+    // BackgroundScheduler() — the constructor CALL, not a bare mention. The bare
+    // word appears on the import line too (`from apscheduler...import
+    // BackgroundScheduler`), which would double-count one scheduler as two cron
+    // findings. Require the call parens. (Found on real code.)
+    code.match(/BackgroundScheduler\s*\(/) ||
     code.match(/cron\.schedule\(/) ||
     code.match(/new\s+CronJob\b/) ||
     code.match(/@Cron\b/) ||
@@ -194,6 +198,7 @@ function listener(code: string): string | null {
 
 function symbolAdded(code: string): string | null {
   const m =
+    code.match(/^\s*async\s+def\s+(\w+)/) ||
     code.match(/^\s*def\s+(\w+)/) ||
     code.match(/^\s*class\s+(\w+)/) ||
     code.match(/^\s*export\s+default\s+class\s+(\w+)/) ||

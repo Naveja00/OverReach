@@ -613,4 +613,57 @@ export async function runTaxonomyTests(
     ok("flags function-valued const 'validateForm' (arrow)", has(r, "scope.feature", /validateForm/));
     ok("flags class-valued const 'Notifier'", has(r, "scope.feature", /Notifier/));
   }
+
+  // [T25k] Python `async def` functions are real module surface and MUST be
+  // captured as symbols (→ scope.feature). The original matcher only had
+  // `def `, so `async def stripe_webhook(...)` / `async def login(...)` were
+  // silently missed — a real agent run on a FastAPI codebase (Stripe checkout +
+  // auth tasks) showed authorized-in-scope functions never matching, which both
+  // under-counts real surface AND, when the prompt named the function, caused a
+  // false positive elsewhere. Now `async def` is matched before `def`.
+  console.log("[T25k] Python async def functions ARE captured as scope.feature");
+  {
+    const r = await checkOverreach(
+      "add a profile page",
+      "+++ b/app.py\n+async def create_checkout_session(request):\n+    pass\n+async def stripe_webhook(request):\n+    pass\n+def sync_helper():\n+    pass\n",
+      { scopeOverride: scope({ files_allowed: ["app.py"], features_allowed: ["profile page"] }) },
+    );
+    ok("catches async def 'create_checkout_session'", has(r, "scope.feature", /create_checkout_session/));
+    ok("catches async def 'stripe_webhook'", has(r, "scope.feature", /stripe_webhook/));
+    ok("still catches sync def 'sync_helper'", has(r, "scope.feature", /sync_helper/));
+  }
+
+  // [T25l] BackgroundScheduler — the constructor CALL is a cron/runtime surface,
+  // but the bare import line `from apscheduler.scheduler import
+  // BackgroundScheduler` is NOT. The bare-word matcher flagged both, double-
+  // counting one scheduler as two cron findings on a real agent task. Now the
+  // matcher requires the call parens.
+  console.log("[T25l] BackgroundScheduler call is cron; the import line is NOT (no double-count)");
+  {
+    const r = await checkOverreach(
+      "add a profile page",
+      "+++ b/app.py\n+from apscheduler.scheduler import BackgroundScheduler\n+sched = BackgroundScheduler()\n+sched.start()\n",
+      { scopeOverride: scope({ files_allowed: ["app.py"], features_allowed: ["profile page"] }) },
+    );
+    const cronFindings = r.findings.filter((f) => f.kind === "scope.cron");
+    ok("flags the BackgroundScheduler() call as cron", cronFindings.some((f) => /BackgroundScheduler/i.test(f.evidence)));
+    ok("counts exactly ONE cron finding (no import-line double-count)", cronFindings.length === 1, `got ${cronFindings.length}`);
+  }
+
+  // [T25m] No-key deterministic fallback: a prompt like "Add a /api/ping
+  // endpoint" must put /api/ping into endpoints_allowed AND must NOT let it leak
+  // into files_allowed (where it would authorize the host file, e.g. app.py,
+  // and then false-positive as scope.file on perfectly clean work). The fallback
+  // dropped `api` from its file-path prefixes and dedups files vs endpoints. A
+  // real agent run showed the clean control task reporting a bogus scope.file
+  // finding on app.py before this fix. Tested at the extractor level so it does
+  // not depend on an API key being configured.
+  console.log("[T25m] deterministic fallback: /api/ping is an endpoint, never an allowed file (clean control stays clean)");
+  {
+    const { extractDeterministic } = await import("../src/scope/extract_deterministic.js");
+    const s = extractDeterministic("Add a /api/ping endpoint");
+    ok("/api/ping is in endpoints_allowed", s.endpoints_allowed.includes("/api/ping"));
+    ok("no 'api/ping' or 'app' leaked into files_allowed", !s.files_allowed.some((f) => /api\/ping|^api$|app/i.test(f)), `files_allowed=${JSON.stringify(s.files_allowed)}`);
+    ok("files_allowed is empty (nothing posed as a file)", s.files_allowed.length === 0, `files_allowed=${JSON.stringify(s.files_allowed)}`);
+  }
 }

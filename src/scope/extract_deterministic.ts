@@ -26,8 +26,12 @@ const EMPTY_SCOPE: Scope = {
 // Known file extensions
 const FILE_EXT = /\b[\w./-]+\.(tsx?|jsx?|py|rs|go|rb|java|vue|svelte|css|scss|html|json|ya?ml|toml|md|sql|sh|c|cpp|h)\b/gi;
 
-// Paths that look like file/dir references (contain / and alphanumeric)
-const FILE_PATH = /\b(?:src|app|lib|pages|components|routes|api|public|dist|build|config|utils|hooks|services|models|controllers|middleware|tests?)\/[\w./-]+\b/gi;
+// Paths that look like file/dir references (contain / and alphanumeric).
+// `api` is intentionally NOT a prefix here — `/api/ping` is an endpoint, not a
+// file, and including it made the no-key path flag app.py as scope.file on
+// perfectly clean work ("Add a /api/ping endpoint"). A real file under api/
+// (api/handlers.ts) is still caught by FILE_EXT via its extension.
+const FILE_PATH = /\b(?:src|app|lib|pages|components|routes|public|dist|build|config|utils|hooks|services|models|controllers|middleware|tests?)\/[\w./-]+\b/gi;
 
 // Endpoints: /api/... or /path patterns
 const ENDPOINT = /(?:^|\s)(\/[a-z][\w/-]*(?:\/:[\w]+|\/\[[\w]+\]|\/\{[\w]+\})*)\b/gi;
@@ -88,6 +92,15 @@ export function extractDeterministic(prompt: string): Scope {
     if (ep.length > 1 && !ep.match(/^\/[a-z]$/)) endpoints.add(ep);
   }
   scope.endpoints_allowed = [...endpoints];
+
+  // An endpoint path must never also appear as an allowed file — otherwise the
+  // file the route lives in (app.py) gets flagged as scope.file on clean work.
+  // Drop any file entry that is the endpoint with its slash dropped.
+  if (endpoints.size > 0) {
+    scope.files_allowed = scope.files_allowed.filter(
+      (f) => !endpoints.has(f) && !endpoints.has("/" + f),
+    );
+  }
 
   // Env vars
   const envVars = new Set<string>();

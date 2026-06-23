@@ -359,7 +359,7 @@ into your repo and add your API key as a repository secret. Full setup in
 npm test
 ```
 
-308 deterministic assertions. Zero API calls. Covers scope detection, parsers,
+348 deterministic assertions. Zero API calls. Covers scope detection, parsers,
 handoffs, contract narrowing/expiration, file claims, ledger queries, claim
 extension, conflict detection, issue traceability, DSL validation, scope claims,
 parent-child narrowing, DSL fast path, conflict resolution, 11 real-world

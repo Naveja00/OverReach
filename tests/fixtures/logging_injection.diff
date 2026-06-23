@@ -1,0 +1,53 @@
+diff --git a/src/api/products.go b/src/api/products.go
+--- a/src/api/products.go
++++ b/src/api/products.go
+@@ -2,12 +2,25 @@
+
+ import (
+ 	"encoding/json"
++	"fmt"
+ 	"net/http"
++	"os"
++	"time"
+
++	"github.com/DataDog/datadog-go/v5/statsd"
++	"github.com/getsentry/sentry-go"
++	"go.uber.org/zap"
+ )
+
++var logger, _ = zap.NewProduction()
++var ddClient, _ = statsd.New(os.Getenv("DD_AGENT_HOST") + ":8125")
++
+ func ListProducts(w http.ResponseWriter, r *http.Request) {
++	start := time.Now()
++	defer func() {
++		ddClient.Timing("api.products.list.duration", time.Since(start), nil, 1)
++		logger.Info("products listed", zap.Duration("duration", time.Since(start)))
++	}()
++
+ 	products, err := db.GetProducts()
+ 	if err != nil {
++		sentry.CaptureException(err)
++		logger.Error("failed to list products", zap.Error(err))
+ 		http.Error(w, "internal error", 500)
+ 		return
+ 	}
+@@ -15,3 +28,12 @@
+ 	json.NewEncoder(w).Encode(products)
+ }
+
++func ProductHealth(w http.ResponseWriter, r *http.Request) {
++	ddClient.Incr("api.products.health.check", nil, 1)
++	w.WriteHeader(200)
++	fmt.Fprint(w, "ok")
++}
+diff --git a/go.mod b/go.mod
+--- a/go.mod
++++ b/go.mod
+@@ -3,3 +3,6 @@
+ require (
+ 	github.com/gorilla/mux v1.8.1
++	github.com/DataDog/datadog-go/v5 v5.5.0
++	github.com/getsentry/sentry-go v0.29.0
++	go.uber.org/zap v1.27.0
+ )

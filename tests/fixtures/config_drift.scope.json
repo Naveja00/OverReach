@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/components/LoginButton.tsx"],
+  "features_allowed": ["fix login button color"],
+  "endpoints_allowed": [],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": ["change button color"]
+}

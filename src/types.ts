@@ -26,6 +26,12 @@ export interface Actual {
   endpoints_added: string[];
   cron_added: string[];
   new_deps: string[];
+  // Runtime listeners: a server opening a port (.listen(8080)), a WebSocket/HTTP
+  // server constructor, or a global-object event handler (process.on,
+  // window/document.addEventListener). Same HIGH-severity runtime-surface class
+  // as endpoints/cron/env — an agent can install one silently. Deterministic:
+  // the call is literally in the diff.
+  listeners_added: string[];
 }
 
 // Namespaced finding taxonomy (hardening item #4). `<category>.<kind>` so
@@ -39,6 +45,7 @@ export type FindingKind =
   | "scope.endpoint"
   | "scope.env"
   | "scope.cron"
+  | "scope.listener"
   | "contract.expansion"
   | "contract.expired"
   | "handoff.context"
@@ -48,9 +55,13 @@ export type FindingKind =
 // the ONLY kinds derivable from (prompt, diff) by set arithmetic. This is the
 // frozen runtime source of truth. Anything that requires inference (intent,
 // completeness, success) must NOT appear here; it belongs in a separate product.
-// The test suite asserts this set is exactly these six and that the compare layer
-// never emits a kind outside it — so adding an inference-based kind fails the
-// build unless this constant is deliberately amended with a stated justification.
+// The test suite asserts this set is exactly these seven and that the compare
+// layer never emits a kind outside it — so adding an inference-based kind fails
+// the build unless this constant is deliberately amended with a stated
+// justification. scope.listener was added (2026-06-23) as the 7th kind: a server
+// opening a port / a global-object event handler is a runtime surface an agent
+// can install silently, and detecting it is purely deterministic (the listen /
+// process.on / addEventListener call is literally in the diff) — no inference.
 export const DETERMINISTIC_FINDING_KINDS = [
   "scope.file",
   "scope.feature",
@@ -58,6 +69,7 @@ export const DETERMINISTIC_FINDING_KINDS = [
   "scope.endpoint",
   "scope.env",
   "scope.cron",
+  "scope.listener",
 ] as const;
 
 export interface Finding {

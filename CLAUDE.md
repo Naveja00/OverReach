@@ -29,6 +29,21 @@ Enforcement rules:
   non-deterministic kind fails the test unless the invariant is deliberately
   amended here with a stated justification.
 
+### Amendments to the frozen set
+- **`scope.listener` (added 2026-06-23, 7th kind).** A runtime listener — a
+  server opening a port (`.listen(8080)`), a `WebSocket`/`http`/`net` server
+  constructor, or a *global-object* event handler (`process.on`,
+  `window`/`document`/`self.addEventListener`) — is the same HIGH-severity
+  runtime-surface class as `scope.endpoint`/`scope.env`/`scope.cron`, and was a
+  silent blind spot before this amendment. It is purely deterministic: the
+  listen / `process.on` / `addEventListener` call is literally in the diff, so
+  the finding is derivable from (prompt, diff) by set arithmetic with no
+  inference. Generic element `.addEventListener` (UI event handlers) is
+  intentionally NOT flagged — that is feature-scope, not a runtime surface.
+  Listeners authorize via `features_allowed` + `behavioral_changes_allowed`
+  (keyword "listen"/"server"/"websocket"/"crash handler" or fuzzy evidence
+  match), the same pattern `scope.cron` uses (no dedicated scope field).
+
 ## One-line product
 An MCP server exposing ONE tool, `check_overreach(prompt, diff)`, that audits a code
 diff against the originating natural-language prompt and flags every out-of-scope
@@ -91,7 +106,7 @@ check_overreach(prompt: string, diff: string, options?: { language?: string }) -
   "findings": [
     {
       "kind": "scope.file | scope.feature | scope.dep | scope.endpoint | "
-             "scope.env | scope.cron",
+             "scope.env | scope.cron | scope.listener",
       "detail": "human-readable, cites the specific diff line/symbol",
       "file": "path:line",
       "severity": "high | medium | low",
@@ -156,11 +171,19 @@ Parse the unified diff with regex + light parsing. Detect, per language:
 - Python: `cron\\.\\w+\\(`, `@scheduler\\.`, `schedule\\.every`, `BackgroundScheduler`
 - TS/JS: `cron\\.schedule\\(`, `new CronJob`, `@nestjs/schedule` `@Cron`, Vercel `cron` in config
 
-**New deps:** parse `+` lines in `package.json` ("dependencies"/"devDependencies" blocks)
-and `requirements.txt` / `pyproject.toml` (`+` lines that look like `name==` or `name>=`).
+**New deps:** parse `+` lines in `package.json` / `composer.json` ("dependencies"/"devDependencies"
+blocks), `requirements.txt` / `pyproject.toml` / `Pipfile` (`+` lines like `name==`/`name>=`),
+`go.mod` (`require` lines), `Gemfile`/`.gemspec` (`gem "name"`), and `Cargo.toml`
+(`name = "ver"` / `name = { ... }`, with a skip-set for `[package]`/`[profile]`/`[workspace]`
+keys like `edition`/`version` so config fields are not mistaken for deps).
 
 **Symbols added:** `^\\+\\s*(def |class |function |const |export function |export const )`
-→ capture names. Used to populate `symbols_added` and to detect behavioral changes.
+and `export default class/function` → capture names. Also folded into `symbols_added`
+(so they flow through `scope.feature`, the existing kind — no new kind): infrastructure-as-code
+resources — terraform `resource "aws_s3_bucket" "x"`, kubernetes `kind:` (allowlisted kinds,
+yaml-only), CloudFormation `Type: AWS::X::Y` — and SQL DDL `CREATE/ALTER TABLE foo`. A smuggled
+S3 bucket / k8s Deployment / table the prompt never named is the same class of unauthorized
+scope as a smuggled code symbol. Used to populate `symbols_added` and to detect behavioral changes.
 
 Return the `actual` block. No LLM. Must run in <100ms for a 2000-line diff.
 
@@ -168,7 +191,18 @@ Return the `actual` block. No LLM. Must run in <100ms for a 2000-line diff.
 For each actual category, subtract anything that appears in the matching scope category
 (fuzzy match: case-insensitive substring / path-prefix for files, exact for deps/env).
 Everything left = a finding. Assign severity:
-- `scope.env` / `scope.endpoint` / `scope.cron` → high
+
+> **Typo-tolerant authorization (deterministic).** The `authorized` relation is
+> widened so a misspelled scope token still matches the real identifier: equal,
+> substring, or within a 1–2 char Damerau-Levenshtein edit (OSA), gated by a
+> common-word guard so real words never collide (`auth` ≠ `auto`, `form` ≠ `from`).
+> This is NOT inference — edit distance is a pure function of the two strings, so
+> the finding is still derivable from (prompt, diff) by deterministic set
+> arithmetic. The point: a Stage-1 model that leaves `"setings"`/`"logn"` uncorrected
+> must not cause a false *positive* (flagging in-scope work as creep). The engine
+> matches the typo to the real identifier regardless. Proven in the [T24] taxonomy
+> group (zero cloud).
+- `scope.env` / `scope.endpoint` / `scope.cron` / `scope.listener` → high
 - `scope.dep` → medium
 - `scope.file` → medium (high if outside any dir implied by scope)
 - `scope.feature` (symbols not matching any allowed feature keyword) → low/medium

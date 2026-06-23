@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["blog/views.py"],
+  "features_allowed": ["sort posts by date", "post list view"],
+  "endpoints_allowed": [],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": ["order posts by created_at"]
+}

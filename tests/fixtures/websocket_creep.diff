@@ -1,0 +1,77 @@
+diff --git a/src/components/NotificationBadge.vue b/src/components/NotificationBadge.vue
+new file mode 100644
+--- /dev/null
++++ b/src/components/NotificationBadge.vue
+@@ -0,0 +1,35 @@
++<script setup lang="ts">
++import { ref, onMounted, onUnmounted } from "vue";
++import { io } from "socket.io-client";
++
++const count = ref(0);
++const socket = io(import.meta.env.VITE_WS_URL, {
++  auth: { token: localStorage.getItem("auth_token") },
++});
++
++onMounted(() => {
++  socket.on("notification", () => { count.value++; });
++  socket.on("notification:clear", () => { count.value = 0; });
++  fetch("/api/notifications/unread")
++    .then(r => r.json())
++    .then(d => { count.value = d.count; });
++});
++
++onUnmounted(() => { socket.disconnect(); });
++</script>
++
++<template>
++  <div class="relative">
++    <span v-if="count > 0" class="badge">{{ count }}</span>
++    <BellIcon />
++  </div>
++</template>
+diff --git a/server/ws.ts b/server/ws.ts
+new file mode 100644
+--- /dev/null
++++ b/server/ws.ts
+@@ -0,0 +1,28 @@
++import { Server } from "socket.io";
++import { createAdapter } from "@socket.io/redis-adapter";
++import { createClient } from "redis";
++
++const pubClient = createClient({ url: process.env.REDIS_URL });
++const subClient = pubClient.duplicate();
++
++export function initWebSocket(httpServer: any) {
++  const io = new Server(httpServer, {
++    cors: { origin: process.env.CLIENT_URL },
++    adapter: createAdapter(pubClient, subClient),
++  });
++
++  io.on("connection", (socket) => {
++    const userId = socket.handshake.auth.userId;
++    socket.join(`user:${userId}`);
++
++    socket.on("mark_read", async (notificationId: string) => {
++      await fetch(`http://localhost:3000/api/notifications/${notificationId}/read`, {
++        method: "PATCH",
++      });
++      socket.emit("notification:clear");
++    });
++  });
++
++  return io;
++}
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -8,5 +8,10 @@
+   "dependencies": {
+     "vue": "^3.5.0",
+-    "@vueuse/core": "^11.0.0"
++    "@vueuse/core": "^11.0.0",
++    "socket.io": "^4.8.0",
++    "socket.io-client": "^4.8.0",
++    "@socket.io/redis-adapter": "^8.3.0",
++    "redis": "^4.7.0"
+   }
+ }

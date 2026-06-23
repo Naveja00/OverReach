@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["sections/product-size-chart.liquid", "assets/size-chart.js"],
+  "features_allowed": ["size chart modal on product page"],
+  "endpoints_allowed": [],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": ["open modal with size measurements table"]
+}

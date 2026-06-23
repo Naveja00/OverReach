@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/utils/validate.ts"],
+  "features_allowed": ["fix email validation regex"],
+  "endpoints_allowed": [],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": ["improve email validation"]
+}

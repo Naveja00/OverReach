@@ -7,6 +7,8 @@ import { readFileSync } from "node:fs";
 import { checkOverreach } from "../src/tools/check_overreach.js";
 import type { Scope, CheckResult } from "../src/types.js";
 import { runDSLTests } from "./dsl_tests.js";
+import { runRealWorldTests } from "./real_world_tests.js";
+import { runTaxonomyTests } from "./taxonomy_tests.js";
 
 let failures = 0;
 let passes = 0;
@@ -232,8 +234,8 @@ async function main() {
     const { DETERMINISTIC_FINDING_KINDS } = await import("../src/types.js");
     const det = new Set<string>(DETERMINISTIC_FINDING_KINDS as readonly string[]);
 
-    // (a) the frozen set is exactly the six scope.* gate kinds â no more, no less.
-    ok("deterministic set is exactly the 6 scope.* kinds", det.size === 6 && [...det].every((k) => k.startsWith("scope.")), JSON.stringify([...det]));
+    // (a) the frozen set is exactly the seven scope.* gate kinds â no more, no less.
+    ok("deterministic set is exactly the 7 scope.* kinds", det.size === 7 && [...det].every((k) => k.startsWith("scope.")), JSON.stringify([...det]));
     ok("no inference-based kind (contract.*/handoff.*) is in the deterministic set", ![...det].some((k) => k.startsWith("contract.") || k.startsWith("handoff.")), JSON.stringify([...det]));
 
     // (b) behavioral: every finding the compare layer actually emits across all
@@ -478,6 +480,8 @@ async function main() {
   }
 
   await runDSLTests(ok, load, loadScope);
+  await runRealWorldTests(ok, load, loadScope);
+  await runTaxonomyTests(ok);
 
   // -- Summary ------------------------------------------------------------------
   console.log(`\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`);

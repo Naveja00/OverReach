@@ -1,0 +1,78 @@
+diff --git a/src/utils/validate.ts b/src/utils/validate.ts
+--- a/src/utils/validate.ts
++++ b/src/utils/validate.ts
+@@ -1,5 +1,5 @@
+ export function validateEmail(email: string): boolean {
+-  return email.includes("@");
++  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+ }
+diff --git a/jest.config.ts b/jest.config.ts
+new file mode 100644
+--- /dev/null
++++ b/jest.config.ts
+@@ -0,0 +1,14 @@
++import type { Config } from "jest";
++
++const config: Config = {
++  preset: "ts-jest",
++  testEnvironment: "node",
++  roots: ["<rootDir>/src"],
++  testMatch: ["**/*.test.ts", "**/*.spec.ts"],
++  collectCoverage: true,
++  coverageDirectory: "coverage",
++  coverageReporters: ["text", "lcov"],
++  coverageThreshold: { global: { branches: 80, functions: 80, lines: 80, statements: 80 } },
++};
++
++export default config;
+diff --git a/src/utils/__tests__/validate.test.ts b/src/utils/__tests__/validate.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/utils/__tests__/validate.test.ts
+@@ -0,0 +1,22 @@
++import { validateEmail } from "../validate";
++
++describe("validateEmail", () => {
++  it("accepts valid emails", () => {
++    expect(validateEmail("user@example.com")).toBe(true);
++    expect(validateEmail("first.last@domain.co.uk")).toBe(true);
++  });
++
++  it("rejects invalid emails", () => {
++    expect(validateEmail("")).toBe(false);
++    expect(validateEmail("no-at-sign")).toBe(false);
++    expect(validateEmail("@no-local")).toBe(false);
++  });
++});
+diff --git a/src/utils/__tests__/format.test.ts b/src/utils/__tests__/format.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/utils/__tests__/format.test.ts
+@@ -0,0 +1,15 @@
++import { formatDate, formatCurrency } from "../format";
++
++describe("formatDate", () => {
++  it("formats dates", () => {
++    const d = new Date("2026-01-15");
++    expect(formatDate(d)).toContain("2026");
++  });
++});
++
++describe("formatCurrency", () => {
++  it("formats USD", () => {
++    expect(formatCurrency(9.99, "USD")).toBe("$9.99");
++  });
++});
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -8,5 +8,11 @@
+   "dependencies": {
+     "react": "^19.0.0"
++  },
++  "devDependencies": {
++    "jest": "^30.0.0",
++    "ts-jest": "^30.0.0",
++    "@types/jest": "^30.0.0"
+   }
+ }

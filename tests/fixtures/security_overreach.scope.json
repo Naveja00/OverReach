@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/routes/search.ts"],
+  "features_allowed": ["search endpoint"],
+  "endpoints_allowed": ["/api/search"],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": ["search products"]
+}

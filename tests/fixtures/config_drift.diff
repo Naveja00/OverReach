@@ -1,0 +1,80 @@
+diff --git a/src/components/LoginButton.tsx b/src/components/LoginButton.tsx
+--- a/src/components/LoginButton.tsx
++++ b/src/components/LoginButton.tsx
+@@ -5,7 +5,7 @@
+ export function LoginButton() {
+   return (
+     <button
+-      className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg"
++      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
+       onClick={() => signIn()}
+     >
+       Sign In
+diff --git a/tsconfig.json b/tsconfig.json
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -3,8 +3,12 @@
+     "target": "ES2022",
+     "module": "ESNext",
+     "strict": true,
+-    "jsx": "preserve"
++    "jsx": "react-jsx",
++    "esModuleInterop": true,
++    "forceConsistentCasingInFileNames": true,
++    "skipLibCheck": true,
++    "resolveJsonModule": true
+   },
+   "include": ["src"]
+ }
+diff --git a/.eslintrc.json b/.eslintrc.json
+new file mode 100644
+--- /dev/null
++++ b/.eslintrc.json
+@@ -0,0 +1,15 @@
++{
++  "extends": [
++    "next/core-web-vitals",
++    "plugin:@typescript-eslint/recommended",
++    "prettier"
++  ],
++  "rules": {
++    "@typescript-eslint/no-unused-vars": "error",
++    "@typescript-eslint/no-explicit-any": "warn",
++    "no-console": "warn"
++  }
++}
+diff --git a/.prettierrc b/.prettierrc
+new file mode 100644
+--- /dev/null
++++ b/.prettierrc
+@@ -0,0 +1,7 @@
++{
++  "semi": true,
++  "singleQuote": false,
++  "tabWidth": 2,
++  "trailingComma": "all",
++  "printWidth": 100
++}
+diff --git a/.gitignore b/.gitignore
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,3 +1,6 @@
+ node_modules/
+ .next/
+ dist/
++.env
++.env.local
++.claude/
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -10,6 +10,9 @@
+   "dependencies": {
+     "react": "^19.0.0",
+     "next": "^15.0.0"
++  },
++  "devDependencies": {
++    "prettier": "^3.4.0",
++    "@typescript-eslint/eslint-plugin": "^8.0.0"
+   }
+ }

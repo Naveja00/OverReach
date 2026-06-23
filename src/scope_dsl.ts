@@ -272,6 +272,7 @@ export function completeClaim(root: string, claimId: string): boolean {
         endpoints_added: claim.scope.api_routes || [],
         cron_added: [],
         new_deps: claim.scope.dependencies || [],
+        listeners_added: [],
       },
       findings: [],
       scope_creep_score: "LOW",

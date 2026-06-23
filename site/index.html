@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Overreach — Catch every line your AI agent shipped beyond the prompt</title>
+<meta name="description" content="Overreach audits a code diff against the prompt that authorized it and flags every unauthorized dep, env var, endpoint, cron job, or file. Deterministic. Then it coordinates Claude Code, Cursor, and Codex on the same repo." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=Inter:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* ============================================================
+     AXIOM · Frost pack tokens (verbatim from Frost-v1-Pack.md)
+     ============================================================ */
+  :root {
+    --bg: #0a192f;
+    --surface: #112240;
+    --surface-2: #16294d;
+    --text: #ccd6f6;
+    --text-secondary: #8892b0;
+    --accent: #64ffda;
+    --accent-soft: rgba(100, 255, 218, 0.10);
+    --accent-glow: rgba(100, 255, 218, 0.25);
+    --border: rgba(204, 214, 246, 0.08);
+    --danger: #ff6b6b;
+    --danger-soft: rgba(255, 107, 107, 0.12);
+
+    --font-head: 'Sora', 'Helvetica Neue', Arial, sans-serif;
+    --font-body: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'Courier New', monospace;
+
+    --space-xs: 0.5rem;
+    --space-sm: 1rem;
+    --space-md: 2rem;
+    --space-lg: 4rem;
+    --space-xl: 8rem;
+    --space-section: 120px;
+
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --duration-fast: 0.2s;
+    --duration-base: 0.5s;
+    --duration-slow: 1s;
+    --radius: 2px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    padding-bottom: 64px; /* room for the bottom dock */
+  }
+
+  .skip-link {
+    position: absolute; left: -9999px; top: 0;
+    background: var(--accent); color: var(--bg);
+    padding: 0.75rem 1rem; font-family: var(--font-mono); font-size: 0.8rem;
+    z-index: 100;
+  }
+  .skip-link:focus { left: 0; }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  a { color: var(--accent); text-decoration: none; }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 var(--space-md); }
+
+  /* ============================================================
+     Nav — Frost signature bottom dock (no top bar / no sidebar)
+     ============================================================ */
+  .dock {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: rgba(10, 25, 47, 0.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-md);
+    padding: 0.75rem var(--space-md);
+    z-index: 20;
+  }
+  .dock__brand {
+    font-family: var(--font-mono); font-size: 0.8rem;
+    letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--text); font-weight: 500;
+  }
+  .dock__brand span { color: var(--accent); }
+  .dock__links { display: flex; gap: var(--space-md); flex-wrap: wrap; }
+  .dock__links a {
+    font-family: var(--font-mono); font-size: 0.7rem;
+    letter-spacing: 0.15em; text-transform: uppercase;
+    color: var(--text-secondary); position: relative;
+    transition: color var(--duration-fast);
+  }
+  .dock__links a::after {
+    content: ''; position: absolute; bottom: -2px; left: 0;
+    width: 0; height: 1px; background: var(--accent);
+    transition: width 0.3s var(--ease);
+  }
+  .dock__links a:hover { color: var(--accent); }
+  .dock__links a:hover::after { width: 100%; }
+  @media (max-width: 720px) {
+    .dock { flex-direction: column; gap: 0.4rem; padding: 0.5rem; }
+    .dock__links { gap: 0.9rem; }
+    body { padding-bottom: 110px; }
+  }
+
+  /* ============================================================
+     Section scaffolding
+     ============================================================ */
+  section { padding: var(--space-section) 0; }
+  .label {
+    font-family: var(--font-mono); font-size: 0.72rem;
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: var(--space-sm);
+    display: inline-block;
+  }
+  h2 {
+    font-family: var(--font-head); font-weight: 600;
+    font-size: clamp(1.6rem, 3.4vw, 2.6rem); line-height: 1.15;
+    letter-spacing: -0.01em; max-width: 22ch; margin-bottom: var(--space-md);
+  }
+  h3 {
+    font-family: var(--font-head); font-weight: 600;
+    font-size: 1.15rem; margin-bottom: var(--space-xs);
+  }
+  .lede { color: var(--text-secondary); max-width: 60ch; font-size: 1.05rem; }
+
+  /* ============================================================
+     Hero — asymmetric, left-aligned (Frost: restrained, not parallax)
+     ============================================================ */
+  .hero { padding-top: 140px; }
+  .hero-grid {
+    display: grid; grid-template-columns: 1.05fr 0.95fr;
+    gap: var(--space-lg); align-items: center;
+  }
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: 1fr; gap: var(--space-md); }
+  }
+  .hero-content { max-width: 560px; }
+  .hero h1 {
+    font-family: var(--font-head); font-weight: 700;
+    font-size: clamp(2.1rem, 5vw, 3.4rem); line-height: 1.08;
+    letter-spacing: -0.02em; margin: var(--space-sm) 0 var(--space-md);
+  }
+  .hero h1 em { color: var(--accent); font-style: normal; }
+  .hero-sub { color: var(--text-secondary); font-size: 1.08rem; max-width: 52ch; margin-bottom: var(--space-md); }
+  .hero-ctas { display: flex; gap: var(--space-sm); flex-wrap: wrap; align-items: center; }
+
+  /* signature CTA — border-draw fill (Frost) */
+  .btn {
+    position: relative; display: inline-flex; align-items: center; gap: 0.5rem;
+    font-family: var(--font-mono); font-size: 0.8rem;
+    letter-spacing: 0.15em; text-transform: uppercase;
+    padding: 1rem 2.2rem; cursor: pointer; overflow: hidden;
+    border: 1px solid var(--accent); color: var(--accent);
+    background: transparent; text-decoration: none;
+    transition: color var(--duration-base);
+  }
+  .btn::before {
+    content: ''; position: absolute; inset: 0; background: var(--accent);
+    transform: scaleX(0); transform-origin: left;
+    transition: transform 0.4s var(--ease); z-index: -1;
+  }
+  .btn:hover { color: var(--bg); }
+  .btn:hover::before { transform: scaleX(1); }
+  .btn--ghost { border-color: var(--border); color: var(--text-secondary); }
+  .btn--ghost::before { background: var(--surface-2); }
+  .btn--ghost:hover { color: var(--text); border-color: var(--text-secondary); }
+
+  .npx {
+    font-family: var(--font-mono); font-size: 0.85rem;
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 0.7rem 1rem; border-radius: var(--radius);
+    color: var(--text); cursor: pointer; display: inline-flex; align-items: center; gap: 0.6rem;
+    transition: border-color var(--duration-fast);
+  }
+  .npx:hover { border-color: var(--accent); }
+  .npx .dollar { color: var(--text-secondary); }
+  .npx .cmd { color: var(--accent); }
+
+  /* diff visual card */
+  .diff {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+    box-shadow: 0 30px 60px -30px rgba(0,0,0,0.6);
+  }
+  .diff__bar {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.7rem 1rem; border-bottom: 1px solid var(--border);
+    background: rgba(204,214,246,0.02);
+  }
+  .diff__dot { width: 9px; height: 9px; border-radius: 50%; background: var(--surface-2); }
+  .diff__title { font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-secondary); letter-spacing: 0.08em; margin-left: 0.4rem; }
+  .diff__body { padding: 1rem 1.2rem; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.9; }
+  .diff__prompt { color: var(--text-secondary); border-bottom: 1px dashed var(--border); padding-bottom: 0.6rem; margin-bottom: 0.6rem; }
+  .diff__prompt b { color: var(--text); font-weight: 500; }
+  .line { display: flex; align-items: baseline; gap: 0.6rem; white-space: nowrap; overflow: hidden; }
+  .plus { color: var(--accent); }
+  .tag {
+    margin-left: auto; font-size: 0.62rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--danger);
+    background: var(--danger-soft); padding: 0.1rem 0.5rem; border-radius: var(--radius);
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .diff__score {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.7rem 1.2rem; border-top: 1px solid var(--border);
+    font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-secondary);
+  }
+  .score-pill { color: var(--danger); background: var(--danger-soft); padding: 0.15rem 0.6rem; border-radius: var(--radius); letter-spacing: 0.1em; }
+
+  .pullquote {
+    margin-top: var(--space-lg); padding-left: var(--space-md);
+    border-left: 2px solid var(--accent); max-width: 46ch;
+    font-family: var(--font-head); font-weight: 400; font-size: 1.15rem;
+    color: var(--text-secondary); font-style: italic;
+  }
+  .pullquote cite { display: block; margin-top: 0.6rem; font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.15em; text-transform: uppercase; font-style: normal; color: var(--text-secondary); }
+
+  /* ============================================================
+     Ticker strip
+     ============================================================ */
+  .ticker {
+    overflow: hidden; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    background: rgba(17, 34, 64, 0.4);
+  }
+  .ticker-track {
+    display: inline-flex; gap: var(--space-lg); white-space: nowrap;
+    padding: 0.9rem 0; font-family: var(--font-mono); font-size: 0.72rem;
+    letter-spacing: 0.2em; text-transform: uppercase; color: var(--text-secondary);
+    animation: tickerScroll 32s linear infinite;
+  }
+  .ticker-track span { display: inline-flex; align-items: center; gap: var(--space-lg); }
+  .ticker-track b { color: var(--accent); font-weight: 500; }
+  .ticker-track i { color: var(--border); font-style: normal; }
+  @keyframes tickerScroll { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+
+  /* ============================================================
+     Finding-kinds grid
+     ============================================================ */
+  .grid { display: grid; gap: var(--space-sm); }
+  .grid--2 { grid-template-columns: repeat(2, 1fr); }
+  .grid--3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 760px) { .grid--2, .grid--3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: var(--space-md);
+    transition: border-color var(--duration-base), transform var(--duration-base);
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-3px); }
+  .card__kind { font-family: var(--font-mono); font-size: 0.78rem; color: var(--accent); margin-bottom: 0.3rem; }
+  .card__sev { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--text-secondary); float: right; }
+  .card p { color: var(--text-secondary); font-size: 0.92rem; margin-top: 0.4rem; }
+
+  /* ============================================================
+     Stages
+     ============================================================ */
+  .stage { display: grid; grid-template-columns: 60px 1fr; gap: var(--space-md); padding: var(--space-md) 0; border-top: 1px solid var(--border); }
+  .stage:last-child { border-bottom: 1px solid var(--border); }
+  .stage__num { font-family: var(--font-mono); font-size: 0.78rem; color: var(--accent); letter-spacing: 0.1em; padding-top: 0.2rem; }
+  .stage__tag { font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--text-secondary); }
+  .stage h3 { margin-top: 0.2rem; }
+  .stage p { color: var(--text-secondary); font-size: 0.95rem; max-width: 62ch; }
+  .stage p b { color: var(--accent); font-weight: 500; }
+
+  .dsl-callout {
+    margin-top: var(--space-md); background: var(--accent-soft);
+    border: 1px solid var(--accent); border-radius: var(--radius);
+    padding: var(--space-md);
+  }
+  .dsl-callout .label { margin-bottom: 0.5rem; }
+  .dsl-callout p { color: var(--text); font-size: 0.95rem; }
+
+  /* ============================================================
+     Pillars / coordination
+     ============================================================ */
+  .pillar h3 { color: var(--text); margin-bottom: var(--space-xs); }
+  .pillar .num { font-family: var(--font-mono); font-size: 0.7rem; color: var(--accent); letter-spacing: 0.15em; }
+  .pillar p { color: var(--text-secondary); font-size: 0.95rem; }
+
+  .feat { display: grid; grid-template-columns: 150px 1fr; gap: var(--space-md); padding: var(--space-sm) 0; border-top: 1px solid var(--border); }
+  .feat:last-child { border-bottom: 1px solid var(--border); }
+  .feat__k { font-family: var(--font-mono); font-size: 0.78rem; color: var(--accent); }
+  .feat p { color: var(--text-secondary); font-size: 0.92rem; }
+  @media (max-width: 600px) { .feat { grid-template-columns: 1fr; gap: 0.2rem; } }
+
+  /* ============================================================
+     Trust contract statement
+     ============================================================ */
+  .trust {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: var(--space-lg) var(--space-md);
+    text-align: left; position: relative; overflow: hidden;
+  }
+  .trust::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent);
+  }
+  .trust p {
+    font-family: var(--font-head); font-weight: 400;
+    font-size: clamp(1.3rem, 2.6vw, 1.9rem); line-height: 1.3;
+    color: var(--text); max-width: 30ch;
+  }
+  .trust p b { color: var(--accent); font-weight: 600; }
+  .trust small { display: block; margin-top: var(--space-md); font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.1em; color: var(--text-secondary); }
+
+  /* ============================================================
+     Models strip
+     ============================================================ */
+  .models { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+  .model {
+    font-family: var(--font-mono); font-size: 0.78rem;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 0.6rem 1rem; background: var(--surface);
+    display: flex; gap: 0.8rem; align-items: center;
+  }
+  .model b { color: var(--text); font-weight: 500; }
+  .model span { color: var(--accent); }
+
+  /* ============================================================
+     Pricing
+     ============================================================ */
+  .price-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-sm); }
+  @media (max-width: 820px) { .price-grid { grid-template-columns: 1fr; } }
+  .price {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: var(--space-md); display: flex; flex-direction: column;
+  }
+  .price--feat { border-color: var(--accent); position: relative; }
+  .price--feat::before {
+    content: 'MANAGED · WAITLIST OPEN'; position: absolute; top: -1px; right: -1px;
+    font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.15em;
+    background: var(--accent); color: var(--bg); padding: 0.3rem 0.6rem;
+  }
+  .price__name { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--text-secondary); }
+  .price__amt { font-family: var(--font-head); font-weight: 700; font-size: 2.2rem; margin: 0.4rem 0; color: var(--text); }
+  .price__amt small { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); font-weight: 400; }
+  .price__who { color: var(--text-secondary); font-size: 0.85rem; margin-bottom: var(--space-md); }
+  .price ul { list-style: none; margin-bottom: var(--space-md); flex: 1; }
+  .price li { font-size: 0.9rem; color: var(--text-secondary); padding: 0.35rem 0 0.35rem 1.4rem; position: relative; }
+  .price li::before { content: '+'; position: absolute; left: 0; color: var(--accent); font-family: var(--font-mono); }
+  .price .btn { width: 100%; justify-content: center; }
+
+  /* ============================================================
+     Waitlist
+     ============================================================ */
+  .waitlist { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-lg) var(--space-md); }
+  .waitlist form { display: grid; grid-template-columns: 1fr 1fr auto; gap: var(--space-sm); margin-top: var(--space-md); }
+  @media (max-width: 700px) { .waitlist form { grid-template-columns: 1fr; } }
+  .waitlist input, .waitlist select {
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text); font-family: var(--font-mono); font-size: 0.85rem;
+    padding: 0.85rem 1rem; transition: border-color var(--duration-fast);
+  }
+  .waitlist input:focus, .waitlist select:focus { border-color: var(--accent); outline: none; }
+  .waitlist input::placeholder { color: var(--text-secondary); }
+  .waitlist__note { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-secondary); margin-top: var(--space-sm); letter-spacing: 0.05em; }
+  .form-ok { display: none; color: var(--accent); font-family: var(--font-mono); font-size: 0.85rem; margin-top: var(--space-sm); }
+  .form-ok.show { display: block; }
+
+  /* ============================================================
+     Footer
+     ============================================================ */
+  footer { padding: var(--space-lg) 0; border-top: 1px solid var(--border); }
+  footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--space-md); }
+  footer .meta { font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-secondary); letter-spacing: 0.1em; }
+  footer a { color: var(--text-secondary); } footer a:hover { color: var(--accent); }
+
+  /* ============================================================
+     Motion (NO-JS safe: only hides when .js present)
+     ============================================================ */
+  .js .reveal-up { opacity: 0; transform: translateY(24px); transition: opacity var(--duration-slow) var(--ease), transform var(--duration-slow) var(--ease); }
+  .reveal-up.is-visible { opacity: 1; transform: translateY(0); }
+
+  .js .hero-content > * { opacity: 0; transform: translateY(18px); transition: opacity var(--duration-base) var(--ease), transform var(--duration-base) var(--ease); }
+  .js .hero-content.is-visible > * { opacity: 1; transform: translateY(0); }
+  .js .hero-content.is-visible > *:nth-child(1) { transition-delay: 0.05s; }
+  .js .hero-content.is-visible > *:nth-child(2) { transition-delay: 0.15s; }
+  .js .hero-content.is-visible > *:nth-child(3) { transition-delay: 0.25s; }
+  .js .hero-content.is-visible > *:nth-child(4) { transition-delay: 0.35s; }
+  .js .hero-content.is-visible > *:nth-child(5) { transition-delay: 0.45s; }
+
+  .js .diff { opacity: 0; transform: translateY(30px) scale(0.98); transition: opacity var(--duration-slow) var(--ease), transform var(--duration-slow) var(--ease); }
+  .js .diff.is-visible { opacity: 1; transform: translateY(0) scale(1); }
+
+  /* ============================================================
+     Interactive demo
+     ============================================================ */
+  .demo {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: var(--space-md);
+  }
+  .demo__inputs { display: grid; grid-template-columns: 1fr 1.3fr; gap: var(--space-sm); }
+  @media (max-width: 760px) { .demo__inputs { grid-template-columns: 1fr; } }
+  .demo__field { display: flex; flex-direction: column; gap: 0.4rem; }
+  .demo__label {
+    font-family: var(--font-mono); font-size: 0.68rem;
+    letter-spacing: 0.15em; text-transform: uppercase; color: var(--text-secondary);
+  }
+  .demo textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text);
+    font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.6;
+    padding: 0.8rem 1rem; resize: vertical; transition: border-color var(--duration-fast);
+  }
+  .demo textarea:focus { border-color: var(--accent); outline: none; }
+  .demo__controls { display: flex; align-items: center; gap: var(--space-md); margin-top: var(--space-sm); flex-wrap: wrap; }
+  .demo__hint { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); }
+  .demo__hint code { color: var(--accent); }
+  .js .demo__hint#demoNoJs { display: none; }
+  .demo__out {
+    margin-top: var(--space-md); border-top: 1px solid var(--border); padding-top: var(--space-sm);
+  }
+  .demo__row { display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-sm); flex-wrap: wrap; }
+  .demo__outlabel { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--text-secondary); }
+  .score-pill[data-sev="LOW"] { color: var(--accent); background: var(--accent-soft); }
+  .score-pill[data-sev="MEDIUM"] { color: #ffd166; background: rgba(255,209,102,0.12); }
+  .score-pill[data-sev="HIGH"] { color: var(--danger); background: var(--danger-soft); }
+
+  .drift { display: inline-flex; gap: 2px; }
+  .drift__seg {
+    font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.1em;
+    padding: 0.18rem 0.5rem; color: var(--text-secondary);
+    background: rgba(204,214,246,0.04); border: 1px solid var(--border);
+  }
+  .drift__seg.is-active[data-sev="LOW"] { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+  .drift__seg.is-active[data-sev="MEDIUM"] { color: var(--bg); background: #ffd166; border-color: #ffd166; }
+  .drift__seg.is-active[data-sev="HIGH"] { color: var(--bg); background: var(--danger); border-color: var(--danger); }
+
+  .findings { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
+  .findings__empty { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-secondary); }
+  .finding {
+    display: flex; align-items: baseline; gap: 0.6rem;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 0.5rem 0.8rem; font-family: var(--font-mono); font-size: 0.82rem;
+  }
+  .finding__kind {
+    font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+    background: var(--accent-soft); padding: 0.1rem 0.5rem; flex-shrink: 0;
+  }
+  .finding__detail { color: var(--text); flex: 1; overflow-x: auto; white-space: nowrap; }
+  .finding__sev { font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; flex-shrink: 0; }
+  .finding__sev[data-sev="LOW"] { color: var(--accent); }
+  .finding__sev[data-sev="MEDIUM"] { color: #ffd166; }
+  .finding__sev[data-sev="HIGH"] { color: var(--danger); }
+  .demo__micro { margin-top: var(--space-md); font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-secondary); letter-spacing: 0.03em; }
+  .demo__micro code { color: var(--accent); }
+
+  /* ============================================================
+     prefers-reduced-motion — mandatory full block
+     ============================================================ */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+    .ticker-track { animation: none !important; }
+    .js .reveal-up, .js .hero-content > *, .js .diff { opacity: 1 !important; transform: none !important; }
+  }
+</style>
+<script>document.documentElement.classList.add('js');</script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <main id="main">
+
+    <!-- ===================== HERO ===================== -->
+    <section class="hero">
+      <div class="wrap hero-grid">
+        <div class="hero-content">
+          <span class="label">MCP · Scope Audit + Agent Coordination</span>
+          <h1>Your AI agent shipped <em>more</em> than you asked for.</h1>
+          <p class="hero-sub">Overreach audits every diff against the prompt that authorized it — and flags every unauthorized dependency, env var, endpoint, cron job, or file. Deterministic set arithmetic, zero hallucination. Then it coordinates Claude Code, Cursor, and Codex on the same repo so they don't clobber each other.</p>
+          <div class="hero-ctas">
+            <button class="npx" id="npxBtn" title="Copy the demo command" type="button">
+              <span class="dollar">$</span><span class="cmd">npx -y -p overreach overreach-cli demo</span>
+            </button>
+            <a class="btn" href="#waitlist">Get on the waitlist</a>
+          </div>
+          <blockquote class="pullquote">
+            "turns out my ai assistant had been extremely making product decisions without me."
+            <cite>— a developer, somewhere, right now</cite>
+          </blockquote>
+        </div>
+
+        <div class="diff" id="diffCard">
+          <div class="diff__bar">
+            <span class="diff__dot"></span><span class="diff__dot"></span><span class="diff__dot"></span>
+            <span class="diff__title">git diff · overreach audit</span>
+          </div>
+          <div class="diff__body">
+            <div class="diff__prompt"><b>prompt:</b> add a login form to the settings page</div>
+            <div class="line"><span class="plus">+ import Stripe from 'stripe'</span><span class="tag">scope.dep</span></div>
+            <div class="line"><span class="plus">+ const key = process.env.STRIPE_SECRET</span><span class="tag">scope.env</span></div>
+            <div class="line"><span class="plus">+ app.post('/api/checkout', handler)</span><span class="tag">scope.endpoint</span></div>
+            <div class="line"><span class="plus">+ cron.schedule('0 3 * * *', cleanup)</span><span class="tag">scope.cron</span></div>
+            <div class="line"><span class="plus">+ app.listen(3000)</span><span class="tag">scope.listener</span></div>
+          </div>
+          <div class="diff__score">
+            <span>5 unauthorized findings</span>
+            <span class="score-pill">scope_creep_score · HIGH</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TICKER ===================== -->
+    <div class="ticker" aria-hidden="true">
+      <div class="ticker-track">
+        <span><b>scope.dep</b><i>·</i><b>scope.env</b><i>·</i><b>scope.endpoint</b><i>·</i><b>scope.cron</b><i>·</i><b>scope.listener</b><i>·</i><b>scope.file</b><i>·</i><b>scope.feature</b><i>·</i>DETERMINISTIC<i>·</i>NO INFERENCE<i>·</i>16 MCP TOOLS<i>·</i>CROSS-VENDOR<i>·</i>ZERO API COST IN DSL MODE<i>·</i></span>
+        <span><b>scope.dep</b><i>·</i><b>scope.env</b><i>·</i><b>scope.endpoint</b><i>·</i><b>scope.cron</b><i>·</i><b>scope.listener</b><i>·</i><b>scope.file</b><i>·</i><b>scope.feature</b><i>·</i>DETERMINISTIC<i>·</i>NO INFERENCE<i>·</i>16 MCP TOOLS<i>·</i>CROSS-VENDOR<i>·</i>ZERO API COST IN DSL MODE<i>·</i></span>
+      </div>
+    </div>
+
+    <!-- ===================== WHAT IT CATCHES ===================== -->
+    <section id="catches">
+      <div class="wrap">
+        <span class="label reveal-up">What it catches</span>
+        <h2 class="reveal-up">Seven finding kinds. Every one derivable from the diff.</h2>
+        <p class="lede reveal-up" style="margin-bottom: var(--space-lg);">No inference, no opinion. Stage&nbsp;3 is pure set arithmetic: <code style="font-family:var(--font-mono);color:var(--accent)">actual − authorized = findings</code>. If it isn't in the diff, it isn't a finding.</p>
+        <div class="grid grid--3">
+          <div class="card reveal-up"><span class="card__sev">HIGH</span><div class="card__kind">scope.env</div><p>An env var the prompt never named — <code>process.env.STRIPE_SECRET</code>, <code>os.environ[...]</code>, a new <code>.env</code> line.</p></div>
+          <div class="card reveal-up"><span class="card__sev">HIGH</span><div class="card__kind">scope.endpoint</div><p>An HTTP route or handler added without authorization — FastAPI/Flask decorators, Express/Next/Hono routes, <code>route.ts</code> files.</p></div>
+          <div class="card reveal-up"><span class="card__sev">HIGH</span><div class="card__kind">scope.cron</div><p>A scheduled job that appeared from nowhere — <code>cron.schedule</code>, <code>BackgroundScheduler</code>, Vercel cron, <code>@Cron</code>.</p></div>
+          <div class="card reveal-up"><span class="card__sev">HIGH</span><div class="card__kind">scope.listener</div><p>A runtime surface the prompt never opened — <code>app.listen()</code>, a <code>WebSocket.Server</code>, <code>process.on</code>, <code>window.addEventListener</code>.</p></div>
+          <div class="card reveal-up"><span class="card__sev">MEDIUM</span><div class="card__kind">scope.dep</div><p>A package the prompt didn't ask for — a new line in <code>package.json</code> / <code>composer.json</code>, <code>requirements.txt</code>, <code>go.mod</code>, <code>Cargo.toml</code>, or <code>Gemfile</code>.</p></div>
+          <div class="card reveal-up"><span class="card__sev">MEDIUM</span><div class="card__kind">scope.file</div><p>Edits to a file the prompt never touched on — the agent wandered outside the requested path.</p></div>
+          <div class="card reveal-up"><span class="card__sev">LOW</span><div class="card__kind">scope.feature</div><p>A new top-level symbol or feature beyond what was asked — functions, classes, exports the prompt didn't entail — <em>including infrastructure</em>: terraform <code>resource</code>, kubernetes <code>kind:</code>, CloudFormation, and SQL <code>CREATE/ALTER TABLE</code>.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== HOW IT WORKS ===================== -->
+    <section id="how" style="background: rgba(17,34,64,0.35);">
+      <div class="wrap">
+        <span class="label reveal-up">How it works</span>
+        <h2 class="reveal-up">Three stages. One LLM call. Two are pure functions.</h2>
+        <div class="reveal-up" style="margin-top: var(--space-md);">
+          <div class="stage">
+            <div class="stage__num">01</div>
+            <div>
+              <span class="stage__tag">LLM · cheap &amp; fast · temp 0</span>
+              <h3>Extract scope</h3>
+              <p>One small model call reads your prompt and returns the authorized scope as strict JSON. It <b>deciphers typos</b> ("setings" → "settings") but <b>never invents scope</b> — only what you literally asked for. The only stage that calls a model.</p>
+            </div>
+          </div>
+          <div class="stage">
+            <div class="stage__num">02</div>
+            <div>
+              <span class="stage__tag">Deterministic · no LLM · &lt;100ms</span>
+              <h3>Extract actual</h3>
+              <p>Regex + light parsing turns the unified diff into exactly what it adds — imports, deps, env vars, routes, cron jobs, symbols. Per-language. <b>Zero API cost, fully auditable.</b></p>
+            </div>
+          </div>
+          <div class="stage">
+            <div class="stage__num">03</div>
+            <div>
+              <span class="stage__tag">Pure set arithmetic · instant</span>
+              <h3>Diff</h3>
+              <p>For each category, subtract anything the prompt authorized. What's left is a finding, with severity assigned. <b><code>scope_creep_score</code>: HIGH if any high-severity finding, MEDIUM if only medium, else LOW.</b></p>
+            </div>
+          </div>
+        </div>
+
+        <div class="dsl-callout reveal-up">
+          <span class="label">Scope DSL — proactive mode</span>
+          <p>Agents can <b>declare</b> what they will do before writing code via <code style="font-family:var(--font-mono);color:var(--accent)">claim_scope</code>. Validation is then fully deterministic — <b>confidence 1.0, zero API cost, Stage 1 skipped entirely.</b> Parent→child claims can only narrow, never expand. This is the upgrade from reactive auditing to locked, declared intent.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TRY IT IN THE BROWSER ===================== -->
+    <section id="try">
+      <div class="wrap">
+        <span class="label reveal-up">Try it · in your browser</span>
+        <h2 class="reveal-up">Run the deterministic parser on your own prompt + diff.</h2>
+        <p class="lede reveal-up" style="margin-bottom: var(--space-md);">This is a simplified Stage 2 + Stage 3 running live in your tab — no server, no LLM. Edit the prompt or the diff and watch the findings recompute. The same Stripe/cron overreach, reproduced by regex alone.</p>
+
+        <div class="demo reveal-up" id="demoCard">
+          <div class="demo__inputs">
+            <label class="demo__field">
+              <span class="demo__label">Prompt</span>
+              <textarea id="demoPrompt" rows="2" spellcheck="false">add a login form to the settings page</textarea>
+            </label>
+            <label class="demo__field">
+              <span class="demo__label">Diff</span>
+              <textarea id="demoDiff" rows="9" spellcheck="false">+++ b/src/settings.tsx
++import Stripe from 'stripe'
++const key = process.env.STRIPE_SECRET
++app.post('/api/checkout', handler)
++cron.schedule('0 3 * * *', cleanup)
++app.listen(3000)
++export function LoginForm() { return null }</textarea>
+            </label>
+          </div>
+
+          <div class="demo__controls">
+            <button class="btn" id="demoRun" type="button">Run audit</button>
+            <span class="demo__hint" id="demoNoJs">Enable JS to run the live demo, or run <code>npx -y -p overreach overreach-cli demo</code>.</span>
+          </div>
+
+          <div class="demo__out" id="demoOut" aria-live="polite">
+            <div class="demo__row">
+              <span class="demo__outlabel">scope_creep_score</span>
+              <div class="drift" id="driftMeter" aria-hidden="true">
+                <span class="drift__seg" data-sev="LOW">LOW</span>
+                <span class="drift__seg" data-sev="MEDIUM">MED</span>
+                <span class="drift__seg" data-sev="HIGH">HIGH</span>
+              </div>
+              <span class="score-pill" id="demoScore" data-sev="LOW">LOW</span>
+            </div>
+            <ul class="findings" id="demoFindings">
+              <li class="findings__empty">Press “Run audit” to compute findings.</li>
+            </ul>
+          </div>
+        </div>
+
+        <p class="demo__micro reveal-up">Simplified deterministic demo running in your browser — no LLM, no server. The real Stage 2/3 parser is in <code>src/parsers/diff.ts</code>.</p>
+      </div>
+    </section>
+
+    <!-- ===================== THREE THINGS NO ONE ELSE DOES ===================== -->
+    <section id="unique">
+      <div class="wrap">
+        <span class="label reveal-up">What no other tool does</span>
+        <h2 class="reveal-up">Three things, stacked. None of them exist anywhere else.</h2>
+        <div class="grid grid--3" style="margin-top: var(--space-md);">
+          <div class="card pillar reveal-up">
+            <span class="num">01</span>
+            <h3>Catches scope creep</h3>
+            <p>CodeRabbit reviews quality. Overreach reviews <b>authorization</b> — was this line entailed by the prompt? A different question nobody else asks.</p>
+          </div>
+          <div class="card pillar reveal-up">
+            <span class="num">02</span>
+            <h3>Scope DSL</h3>
+            <p>Agents declare intent, files lock, validation is deterministic at confidence 1.0. Zero API cost. No model in the critical path at all.</p>
+          </div>
+          <div class="card pillar reveal-up">
+            <span class="num">03</span>
+            <h3>Coordinates agents</h3>
+            <p>Claude Code only sees Claude Code. Codex worktrees only see Codex. Overreach is the <b>cross-vendor</b> layer — just JSON in git — every agent reads.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== COORDINATION ===================== -->
+    <section id="coordination" style="background: rgba(17,34,64,0.35);">
+      <div class="wrap">
+        <span class="label reveal-up">Multi-agent coordination</span>
+        <h2 class="reveal-up">When three agents share one repo, nothing collides.</h2>
+        <p class="lede reveal-up" style="margin-bottom: var(--space-lg);">A coordination layer any agent can read — it's just JSON files in <code style="font-family:var(--font-mono);color:var(--accent)">.overreach/</code> committed to git. Sixteen MCP tools. Cross-vendor by default.</p>
+        <div class="reveal-up">
+          <div class="feat"><div class="feat__k">file claims</div><p>Agents claim files before working. Others see the claims and work elsewhere. Claims auto-expire (2h default) and can be extended.</p></div>
+          <div class="feat"><div class="feat__k">conflict resolution</div><p>Contested files are blocked or escalated for human review. Every conflict gets an id and a record.</p></div>
+          <div class="feat"><div class="feat__k">coordination ledger</div><p>Every agent's work is logged — files touched, scope-creep score, mode (dsl/inferred), confidence, timestamp. Read before you start.</p></div>
+          <div class="feat"><div class="feat__k">traceability</div><p>Trace any file change back to the ticket that caused it. <code style="font-family:var(--font-mono);color:var(--accent)">who_touched("src/auth.ts")</code> → the full agent history.</p></div>
+          <div class="feat"><div class="feat__k">delegation chains</div><p>Parent→child handoffs can only narrow scope, never expand. Contracts carry an optional TTL — expired contracts flag HIGH so stale agents stop committing.</p></div>
+          <div class="feat"><div class="feat__k">cross-vendor init</div><p>One command writes <code>CLAUDE.md</code>, <code>.cursorrules</code>, <code>codex.md</code>, a pre-commit hook, and the coordination config. Every vendor onboarded at once.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TRUST CONTRACT ===================== -->
+    <section id="trust">
+      <div class="wrap">
+        <div class="trust reveal-up">
+          <span class="label">The trust contract</span>
+          <p>Every finding is derivable from <b>(prompt, diff)</b> by deterministic set arithmetic. No finding depends on inference, opinion, or "what done looks like."</p>
+          <small>This is what separates Overreach from every probabilistic AI reviewer — and it is not weakened by any feature we ship.</small>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== MODELS ===================== -->
+    <section style="padding: var(--space-lg) 0;">
+      <div class="wrap">
+        <span class="label reveal-up">Tested models · 308 deterministic assertions · 0 failed</span>
+        <div class="models reveal-up" style="margin-top: var(--space-sm);">
+          <div class="model"><b>Claude Sonnet 4.6</b><span>82/82</span></div>
+          <div class="model"><b>Claude Opus 4.6</b><span>65/65</span></div>
+          <div class="model"><b>GLM 5.2</b><span>82/82</span></div>
+          <div class="model"><b>Kimi K2.7-Code</b><span>82/82</span></div>
+          <div class="model"><b>MiniMax M3</b><span>81/82</span></div>
+        </div>
+        <p class="micro reveal-up" style="margin-top: var(--space-sm); max-width: 640px; color: var(--text-dim);">
+          Per-model scores are Stage 1 (scope extraction) accuracy, last verified 2026-06-19 —
+          cloud models drift (GLM 5.2 no longer deciphered the <code>setings</code>→<code>settings</code> typo
+          as of 2026-06-23). They are evidence the pipeline works across model families, not a live SLA.
+          The guarantee doesn't depend on them: Stages 2 &amp; 3 are pure functions — every finding is
+          derivable from (prompt, diff) regardless of which model produced the scope. A bad Stage 1 yields
+          a wrong <em>scope</em>, never a hallucinated <em>finding</em>.
+        </p>
+      </div>
+    </section>
+
+    <!-- ===================== COMPLIANCE / SECURITY BUYER ===================== -->
+    <section id="compliance" style="background: rgba(17,34,64,0.35);">
+      <div class="wrap">
+        <span class="label reveal-up">For security &amp; platform teams</span>
+        <h2 class="reveal-up">SOC 2 for AI-generated code.</h2>
+        <p class="lede reveal-up" style="margin-bottom: var(--space-lg);">When agents write a growing share of your code, the audit question stops being “is this good code?” and becomes “did a human authorize this?” Overreach is audit infrastructure for autonomous coding agents — every AI-authored change traced to its authorizing prompt.</p>
+
+        <div class="grid grid--3">
+          <div class="card reveal-up"><div class="card__kind">Prompt-of-record</div><p>Every change is tied to the natural-language prompt that authorized it. The audit trail starts at intent, not at the commit.</p></div>
+          <div class="card reveal-up"><div class="card__kind">Who-touched traceability</div><p><code style="font-family:var(--font-mono);color:var(--accent)">who_touched(file)</code> returns the full agent history per file: which agent, which mode (dsl/inferred), confidence, scope-creep score, timestamp, task_id/issue_ref.</p></div>
+          <div class="card reveal-up"><div class="card__kind">Delegation chains + TTL</div><p>Parent→child scope can only narrow, never expand; contracts expire so stale agents stop committing under old authorization. Expired = flagged HIGH.</p></div>
+          <div class="card reveal-up"><div class="card__kind">Deterministic findings</div><p>No model opinion in the audit record. A finding is provable from (prompt, diff). That’s what makes it auditor-signable, not “AI said so.”</p></div>
+          <div class="card reveal-up"><div class="card__kind">Coordination ledger</div><p>A git-committed JSON record of every agent’s work across vendors. Version-controlled evidence.</p></div>
+          <div class="card reveal-up"><div class="card__kind">CI enforcement</div><p>The managed GitHub App fails PRs on HIGH server-side. The gate an agent can’t skip.</p></div>
+        </div>
+
+        <p class="reveal-up" style="margin-top: var(--space-lg); font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary); max-width: 70ch;">Bring your own framework. The <code style="color:var(--accent)">.overreach/</code> format is an open, vendor-neutral protocol — <a href="../spec/README.md">see the spec</a>.</p>
+      </div>
+    </section>
+
+    <!-- ===================== PRICING ===================== -->
+    <section id="pricing" style="background: rgba(17,34,64,0.35);">
+      <div class="wrap">
+        <span class="label reveal-up">Pricing</span>
+        <h2 class="reveal-up">The tool is free. The managed gate is paid.</h2>
+        <p class="lede reveal-up" style="margin-bottom: var(--space-lg);">Open-core, forever. The <code style="font-family:var(--font-mono);color:var(--accent)">npx</code> tool, CLI, pre-commit hook, and CI workflow are free. The managed GitHub App — the hard backstop that blocks scope creep on every PR with no per-repo key — is the paid layer. Taking pilot teams now.</p>
+        <div class="price-grid">
+          <div class="price reveal-up">
+            <div class="price__name">Free</div>
+            <div class="price__amt">$0</div>
+            <div class="price__who">Solo devs &amp; the whole top of the funnel.</div>
+            <ul>
+              <li>The <code>npx overreach</code> MCP tool</li>
+              <li>CLI + <code>--json</code> for your own CI</li>
+              <li>Pre-commit hook (blocks HIGH)</li>
+              <li>Scope DSL — deterministic, zero cost</li>
+              <li>16 coordination MCP tools</li>
+              <li>Bring your own model key</li>
+            </ul>
+            <button class="btn btn--ghost npx-cta" type="button"><span class="dollar" style="color:var(--text-secondary)">$</span><span class="cmd" style="color:var(--text)">npx -y overreach</span></button>
+          </div>
+
+          <div class="price price--feat reveal-up">
+            <div class="price__name">Pro</div>
+            <div class="price__amt">$19<small>/repo/mo</small></div>
+            <div class="price__who">Teams who want the gate enforced, not self-reported.</div>
+            <ul>
+              <li>Managed GitHub App — no per-repo key</li>
+              <li>PR status check: fails on scope_creep_score = HIGH</li>
+              <li>Team dashboard over the coordination ledger</li>
+              <li>Scope-creep feed across every PR</li>
+              <li>who-touched traceability, web view</li>
+              <li>Email support</li>
+            </ul>
+            <a class="btn" href="#waitlist">Join the waitlist</a>
+          </div>
+
+          <div class="price reveal-up">
+            <div class="price__name">Team</div>
+            <div class="price__amt">$59<small>/mo · 5 repos</small></div>
+            <div class="price__who">Multiple agents, multiple repos, one view.</div>
+            <ul>
+              <li>Everything in Pro, ×5 repos</li>
+              <li>Org-wide scope-creep policy</li>
+              <li>Cross-repo coordination dashboard</li>
+              <li>Slack alerts on HIGH findings</li>
+              <li>Audit export (CSV / JSON)</li>
+              <li>Priority support</li>
+            </ul>
+            <a class="btn btn--ghost" href="#waitlist">Join the waitlist</a>
+          </div>
+        </div>
+        <p class="reveal-up" style="margin-top: var(--space-md); font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-secondary);">Need SSO, custom policy, or an SLA? <a href="#waitlist">Enterprise → talk to us.</a></p>
+      </div>
+    </section>
+
+    <!-- ===================== WAITLIST ===================== -->
+    <section id="waitlist">
+      <div class="wrap">
+        <div class="waitlist reveal-up">
+          <span class="label">Get on the waitlist</span>
+          <h2 style="margin-bottom: 0.4rem;">Be a pilot team. Shape the managed gate.</h2>
+          <p class="lede">First teams get the managed CI scope-creep gate wired into their repos by hand, at pilot pricing, before self-serve ships. No credit card now — we'll reach out.</p>
+          <!-- Replace the action below with your Formspree form id, or wire to /api/waitlist -->
+          <form id="waitlistForm" action="https://formspree.io/f/YOUR_FORMSPREE_ID" method="POST">
+            <input type="text" name="name" placeholder="Name" required aria-label="Name" />
+            <input type="email" name="email" placeholder="you@team.dev" required aria-label="Email" />
+            <select name="size" aria-label="Team size">
+              <option value="solo">Solo / 1 agent</option>
+              <option value="small">2–5 devs</option>
+              <option value="team">6–20 devs</option>
+              <option value="org">20+ / enterprise</option>
+            </select>
+            <input type="hidden" name="_subject" value="Overreach waitlist signup" />
+            <button class="btn" type="submit">Join the waitlist</button>
+          </form>
+          <p class="form-ok" id="formOk">✓ You're on the list. We'll reach out when your pilot slot opens.</p>
+          <p class="waitlist__note">Free tool works today: <code style="color:var(--accent)">npx -y -p overreach overreach-cli demo</code> · No key, no setup.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <div class="meta">OVERREACH · scope audit + agent coordination · MIT</div>
+      <div class="meta">
+        <a href="https://github.com/Naveja00/OverReach">GitHub</a> &nbsp;·&nbsp;
+        <a href="https://www.npmjs.com/package/overreach">npm</a> &nbsp;·&nbsp;
+        <a href="https://github.com/Naveja00/OverReach/issues">Bugs &amp; feedback</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ===================== NAV (bottom dock) ===================== -->
+  <nav class="dock" aria-label="Primary">
+    <div class="dock__brand">OVER<span>REACH</span></div>
+    <div class="dock__links">
+      <a href="#catches">Catches</a>
+      <a href="#how">How</a>
+      <a href="#try">Try</a>
+      <a href="#compliance">Compliance</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#waitlist">Waitlist</a>
+    </div>
+  </nav>
+
+  <script>
+    (function () {
+      // Reveal on scroll
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { e.target.classList.add('is-visible'); io.unobserve(e.target); }
+        });
+      }, { threshold: 0.12 });
+      document.querySelectorAll('.reveal-up, .diff').forEach(function (el) { io.observe(el); });
+
+      // Hero stagger
+      var hero = document.querySelector('.hero-content');
+      if (hero) { requestAnimationFrame(function () { hero.classList.add('is-visible'); }); }
+
+      // Copy npx commands
+      function flash(btn) { var cmd = btn.querySelector('.cmd'); if (!cmd) return; var txt = btn.classList.contains('npx-cta') ? 'npx -y overreach' : cmd.textContent; navigator.clipboard && navigator.clipboard.writeText(txt); var orig = cmd.textContent; cmd.textContent = 'copied ✓'; setTimeout(function () { cmd.textContent = orig; }, 1400); }
+      var npx = document.getElementById('npxBtn'); if (npx) npx.addEventListener('click', function () { flash(npx); });
+      document.querySelectorAll('.npx-cta').forEach(function (b) { b.addEventListener('click', function () { flash(b); }); });
+
+      // Form enhance (degrades to plain POST without JS)
+      var form = document.getElementById('waitlistForm');
+      var ok = document.getElementById('formOk');
+      if (form && form.action.indexOf('YOUR_FORMSPREE_ID') === -1) {
+        form.addEventListener('submit', function (e) {
+          e.preventDefault();
+          fetch(form.action, { method: 'POST', body: new FormData(form), headers: { 'Accept': 'application/json' } })
+            .then(function () { form.style.display = 'none'; ok.classList.add('show'); })
+            .catch(function () { form.submit(); });
+        });
+      }
+
+      // ===== Interactive deterministic demo (simplified Stage 2 + 3) =====
+      // Stage 1 substitute: regex-only scope extraction from the prompt (no LLM).
+      // This mirrors the tool's no-key regex scope-extraction mode — explicitly
+      // NOT an LLM. The full tool's Stage 1 uses a model call; this browser demo
+      // is honest about being deterministic-only.
+      function extractAuthorizedFromPrompt(prompt) {
+        var s = prompt.toLowerCase();
+        var auth = { file: [], endpoint: [], dep: [], env: [], feature: [], cron: [] };
+        // file paths
+        var paths = prompt.match(/(?:[\w.-]+\/)+[\w.-]+|\b(src|app|lib|api|components?|pages?)\/[\w./-]+/g) || [];
+        auth.file = paths.slice();
+        // endpoints
+        var routes = prompt.match(/\/api\/[\w./-]+/g) || [];
+        auth.endpoint = routes.slice();
+        // ENV_VAR_CASE tokens
+        var envs = prompt.match(/\b[A-Z][A-Z0-9_]{2,}\b/g) || [];
+        auth.env = envs.slice();
+        // package-like tokens (word + "package"/"dep"/"import" hints)
+        var pkgs = prompt.match(/\b(?:install|add|import|use|require|depend(?:ency|s) on)\s+([a-z][\w-]+)/g) || [];
+        pkgs.forEach(function (p) { auth.dep.push(p.split(/\s+/).pop()); });
+        // feature keywords (noun phrases — kept loose, LOW severity only)
+        var feats = prompt.match(/\b(login|logout|auth|settings|profile|dashboard|form|button|modal|table|page|api|cron|job|email|password|user|search|filter|export|import)\b/g) || [];
+        auth.feature = feats.slice();
+        // cron hints
+        if (/\b(cron|schedule|nightly|hourly|daily|every\s+\w+)\b/.test(s)) auth.cron.push('cron');
+        return auth;
+      }
+
+      function extractActualFromDiff(diff) {
+        var actual = { file: [], endpoint: [], dep: [], env: [], cron: [], listener: [], feature: [] };
+        var lines = diff.split(/\r?\n/);
+        var curFile = '';
+        var CARGO_NON_DEP = { edition:1, name:1, version:1, authors:1, description:1, license:1, "license-file":1, readme:1, homepage:1, repository:1, documentation:1, keywords:1, categories:1, include:1, exclude:1, publish:1, workspace:1, members:1, resolver:1, "rust-version":1, metadata:1, build:1, links:1, "proc-macro":1, "crate-type":1, path:1, inherit:1, "default-run":1, panic:1, "opt-level":1, debug:1, lto:1 };
+        var K8S = { Deployment:1, Service:1, Ingress:1, ConfigMap:1, Secret:1, Pod:1, Job:1, CronJob:1, StatefulSet:1, DaemonSet:1, ReplicaSet:1, Namespace:1, ClusterRole:1, Role:1, ServiceAccount:1, PersistentVolume:1, PersistentVolumeClaim:1, HorizontalPodAutoscaler:1, NetworkPolicy:1 };
+        lines.forEach(function (raw) {
+          if (!raw) return;
+          // file headers
+          var fh = raw.match(/^\+\+\+ b\/(.+)$/);
+          if (fh) { curFile = fh[1].trim(); actual.file.push(curFile); }
+          // only added lines for the rest
+          if (raw.charAt(0) !== '+') return;
+          var line = raw.slice(1);
+
+          // deps: `import X from 'pkg'` / `require('pkg')` / package.json-style
+          var imp = line.match(/import\s+[\w{},\s]*\s+from\s+['"]([^'"]+)['"]/) || line.match(/require\(\s*['"]([^'"]+)['"]\s*\)/);
+          if (imp) actual.dep.push(imp[1]);
+          var pj = line.match(/^\s*"([\w@\-/.]+)"\s*:\s*["'][\^~><=]*\d/); // package.json / composer.json dep
+          if (pj) actual.dep.push(pj[1]);
+          if (/(^|\/)Gemfile$|\.gemspec$/.test(curFile)) { var gem = line.match(/^\s*gem\s+["']([\w-]+)/); if (gem) actual.dep.push(gem[1]); }
+          if (/Cargo\.toml$/i.test(curFile)) { var car = line.match(/^\s*([\w-]+)\s*=\s*(["']|\{)/); if (car && !CARGO_NON_DEP[car[1]]) actual.dep.push(car[1]); }
+          if (/requirements.*\.txt$|pyproject|Pipfile/.test(curFile)) { var req = line.match(/^\s*([A-Za-z][\w\-.]*)\s*(?:=|>|<|~)/); if (req) actual.dep.push(req[1]); }
+          if (/go\.mod$/.test(curFile)) { var go = line.match(/^\s*([\w.\-/]+)\s+v[\d.]/); if (go) actual.dep.push(go[1]); }
+
+          // env vars
+          var envJs = line.match(/process\.env\.([A-Z_][A-Z0-9_]*)/);
+          if (envJs) actual.env.push(envJs[1]);
+          var envPy = line.match(/os\.environ\[['"]([A-Z_][A-Z0-9_]*)['"]\]/) || line.match(/os\.getenv\(\s*['"]([A-Z_][A-Z0-9_]*)['"]/);
+          if (envPy) actual.env.push(envPy[1]);
+          var dotenv = line.match(/^([A-Z_][A-Z0-9_]*)\s*=/);
+          if (dotenv && /\b(env|dotenv|config)\b/i.test(raw)) actual.env.push(dotenv[1]);
+
+          // endpoints
+          var epJs = line.match(/\.(?:post|get|put|delete|patch)\(\s*['"`]([^'"`]+)['"`]/);
+          if (epJs) actual.endpoint.push(epJs[1]);
+          var epPy = line.match(/@(?:app|router)\.(?:post|get|put|delete|patch)\(\s*['"]([^'"]+)['"]/);
+          if (epPy) actual.endpoint.push(epPy[1]);
+
+          // cron
+          if (/cron\.schedule\(|new CronJob|@Cron|BackgroundScheduler|schedule\.every|APScheduler/.test(line)) {
+            actual.cron.push('cron');
+          }
+
+          // listeners — a server opening a port, a WS/HTTP server, or a
+          // global-object event handler. (Generic element.addEventListener is
+          // feature-scope, not a runtime surface, so it is intentionally not
+          // flagged — same rule as the real parser.)
+          var listen = line.match(/\.listen\s*\(\s*(\d{2,5})?/);
+          if (listen) actual.listener.push(listen[1] ? 'listen(:' + listen[1] + ')' : 'listen()');
+          if (/new\s+(?:WebSocket|ws|http|https|net|Fastify)\b/.test(line)) actual.listener.push('server()');
+          var onG = line.match(/\bprocess\.(?:on|once|addListener)\s*\(\s*['"]([\w.]+)['"]/);
+          if (onG) actual.listener.push("process.on('" + onG[1] + "')");
+          var winG = line.match(/\b(?:window|document|self)\.addEventListener\s*\(\s*['"]([\w.]+)['"]/);
+          if (winG) actual.listener.push("addEventListener('" + winG[1] + "')");
+
+          // feature: top-level symbols + infrastructure-as-code + SQL DDL.
+          // Terraform `resource "aws_s3_bucket" "x"`, k8s `kind:` (yaml, allowlisted),
+          // CloudFormation `Type: AWS::X::Y`, and `CREATE/ALTER TABLE` are smuggled
+          // surfaces an agent can add silently — same class as a code symbol.
+          var sym = line.match(/^\s*(?:export\s+)?(?:function|class|def|const|let|var)\s+([A-Za-z_][\w]*)/) ||
+                    line.match(/^\s*export\s+(?:default\s+)?(?:function|class|const)\s+([A-Za-z_][\w]*)/);
+          if (sym) actual.feature.push(sym[1]);
+          var tf = line.match(/^\s*resource\s+"([\w.]+)"/); if (tf) actual.feature.push(tf[1]);
+          var sql = line.match(/^\s*(?:create|alter)\s+table\s+(?:if\s+not\s+exists\s+)?[`"']?(\w+)/i); if (sql) actual.feature.push(sql[1]);
+          if (/\.ya?ml$/i.test(curFile)) {
+            var k8s = line.match(/^\s*kind:\s*"?(\w+)"?/); if (k8s && K8S[k8s[1]]) actual.feature.push('k8s:' + k8s[1]);
+            var cfn = line.match(/^\s*"?Type"?\s*:\s*"?((?:AWS|GCP|Azure)::[\w:]+)/i); if (cfn) actual.feature.push(cfn[1]);
+          }
+        });
+        // dedupe
+        Object.keys(actual).forEach(function (k) {
+          actual[k] = actual[k].filter(function (v, i, arr) { return arr.indexOf(v) === i; });
+        });
+        return actual;
+      }
+
+      function authorizedMatch(value, allowed) {
+        if (!allowed.length) return false;
+        var v = String(value).toLowerCase();
+        for (var i = 0; i < allowed.length; i++) {
+          if (v.indexOf(String(allowed[i]).toLowerCase()) !== -1) return true;
+        }
+        return false;
+      }
+
+      function runAudit(prompt, diff) {
+        var auth = extractAuthorizedFromPrompt(prompt);
+        var actual = extractActualFromDiff(diff);
+        var findings = [];
+        var sevMap = { env: 'HIGH', endpoint: 'HIGH', cron: 'HIGH', listener: 'HIGH', dep: 'MEDIUM', file: 'MEDIUM', feature: 'LOW' };
+        var promptLower = prompt.toLowerCase();
+        var listenerAuthorized = /\b(listen|server|port|websocket|ws|socket|realtime|crash|graceful|shutdown)\b/.test(promptLower);
+
+        ['dep', 'env', 'endpoint', 'cron', 'listener', 'file', 'feature'].forEach(function (kind) {
+          actual[kind].forEach(function (val) {
+            if (kind === 'listener' && listenerAuthorized) return;
+            if (authorizedMatch(val, auth[kind])) return;
+            // for files, also accept if an allowed path is a prefix
+            if (kind === 'file') {
+              for (var i = 0; i < auth.file.length; i++) {
+                if (val.toLowerCase().indexOf(String(auth.file[i]).toLowerCase()) === 0) return;
+              }
+            }
+            findings.push({ kind: 'scope.' + kind, detail: val, severity: sevMap[kind] });
+          });
+        });
+
+        var score = 'LOW';
+        if (findings.some(function (f) { return f.severity === 'HIGH'; })) score = 'HIGH';
+        else if (findings.some(function (f) { return f.severity === 'MEDIUM'; })) score = 'MEDIUM';
+
+        return { findings: findings, score: score };
+      }
+
+      function renderDemo() {
+        var promptEl = document.getElementById('demoPrompt');
+        var diffEl = document.getElementById('demoDiff');
+        var scoreEl = document.getElementById('demoScore');
+        var driftEl = document.getElementById('driftMeter');
+        var listEl = document.getElementById('demoFindings');
+        if (!promptEl || !diffEl) return;
+        var res = runAudit(promptEl.value, diffEl.value);
+
+        scoreEl.textContent = res.score;
+        scoreEl.setAttribute('data-sev', res.score);
+
+        var segs = driftEl.querySelectorAll('.drift__seg');
+        segs.forEach(function (seg) {
+          if (seg.getAttribute('data-sev') === res.score) seg.classList.add('is-active');
+          else seg.classList.remove('is-active');
+        });
+
+        if (!res.findings.length) {
+          listEl.innerHTML = '<li class="findings__empty">No unauthorized findings — diff is within the prompt’s scope.</li>';
+          return;
+        }
+        var html = res.findings.map(function (f) {
+          return '<li class="finding"><span class="finding__kind">' + f.kind + '</span>' +
+                 '<span class="finding__detail">' + escapeHtml(f.detail) + '</span>' +
+                 '<span class="finding__sev" data-sev="' + f.severity + '">' + f.severity + '</span></li>';
+        }).join('');
+        listEl.innerHTML = html;
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+          return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+        });
+      }
+
+      var runBtn = document.getElementById('demoRun');
+      if (runBtn) {
+        runBtn.addEventListener('click', renderDemo);
+        // auto-run once on load so the demo shows a populated result immediately
+        renderDemo();
+      }
+    })();
+  </script>
+</body>
+</html>

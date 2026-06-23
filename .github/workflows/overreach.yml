@@ -1,39 +1,61 @@
-# Overreach — PR scope-creep gate.
+# Overreach — PR scope-creep gate. Zero-config. No API key required.
 #
 # Audits each pull request's diff against the prompt that authorized it and
-# fails the PR when scope_creep_score is HIGH (the agent added a dep / env var /
-# endpoint / cron / file / feature the prompt didn't ask for).
+# fails the PR when scope_creep_score reaches the configured threshold (default
+# HIGH). Every finding is deterministic `actual − authorized` set arithmetic
+# derived from (prompt, diff) — no inference, no opinion.
 #
-# Prompt source (first found wins):
-#   1. `.overreach/prompt.md` committed in the repo
-#   2. the PR title + body
-#
-# Works with or without an LLM provider key. Without a key, the CLI falls back
-# to deterministic regex-based scope extraction — still catches unauthorized
-# deps, env vars, endpoints, cron jobs, and files. For better scope extraction,
-# optionally set ONE of these repository secrets:
+# ── No-key by default ───────────────────────────────────────────────────────
+# With no secret set, the CLI uses deterministic regex scope extraction — zero
+# LLM calls, zero cost, instant. It still catches every unauthorized dependency,
+# env var, endpoint, cron job, and out-of-scope file. The gate PASSES with zero
+# config. To opt into LLM scope extraction (better feature parsing), set ONE
+# repository secret:
 #   ANTHROPIC_API_KEY   (recommended — best verified results, see TESTED-MODELS.md)
-#   OPENAI_API_KEY
-#   OLLAMA_API_KEY      (Ollama Cloud; also set OLLAMA_BASE_URL if needed)
+#   OPENAI_API_KEY      (+ OPENAI_BASE_URL for OpenRouter / Groq / LM Studio)
+#   OLLAMA_API_KEY      (Ollama Cloud; + OLLAMA_BASE_URL if self-hosted)
 #
-# Copy this file into YOUR repo at .github/workflows/overreach.yml to enable.
+# ── Prompt precedence (first found wins) ────────────────────────────────────
+#   1. .overreach/prompt.md  — committed, long-lived task definition
+#   2. PR title + body       — the human's instruction for that PR
+#   3. AGENTS.md             — committed agent instructions
+#
+# ── Fail threshold ──────────────────────────────────────────────────────────
+# Set `FAIL_ON` below to a comma list of scores that fail the check.
+#   FAIL_ON: HIGH          (default — only HIGH blocks)
+#   FAIL_ON: HIGH,MEDIUM   (also block on MEDIUM)
+#
+# Drop this file in .github/workflows/ and push. That's the whole install.
 name: overreach-scope-audit
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      fail_on:
+        description: "Comma-separated scores that fail the check (HIGH, MEDIUM, LOW)"
+        required: false
+        default: "HIGH"
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: overreach-${{ github.event.pull_request.number }}
+  group: overreach-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
   audit:
+    name: Overreach scope-creep audit
     runs-on: ubuntu-latest
+    env:
+      # Scores that fail the check. Override via workflow_dispatch input or a
+      # repo variable named FAIL_ON. Default: HIGH only.
+      FAIL_ON: ${{ github.event.inputs.fail_on || vars.FAIL_ON || 'HIGH' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,64 +64,100 @@ jobs:
       - name: Resolve authorized prompt
         id: prompt
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_TITLE: ${{ github.event.pull_request.title || '' }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
         run: |
-          if [ -f .overreach/prompt.md ]; then
+          if [ -f .overreach/prompt.md ] && [ -s .overreach/prompt.md ]; then
             cp .overreach/prompt.md "$RUNNER_TEMP/prompt.txt"
             echo "source=.overreach/prompt.md" >> "$GITHUB_OUTPUT"
-          else
+          elif [ -n "$PR_TITLE" ]; then
             printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/prompt.txt"
             echo "source=PR title + body" >> "$GITHUB_OUTPUT"
+          elif [ -f AGENTS.md ] && [ -s AGENTS.md ]; then
+            cp AGENTS.md "$RUNNER_TEMP/prompt.txt"
+            echo "source=AGENTS.md" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/prompt.txt"
+            echo "source=PR title + body (fallback)" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build PR diff
+      - name: Build diff
+        id: diff
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh pr diff "$PR_NUMBER" > "$RUNNER_TEMP/pr.diff"
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr diff "$PR_NUMBER" > "$RUNNER_TEMP/pr.diff"
+          else
+            # push event — audit the last commit
+            git diff HEAD~1 HEAD > "$RUNNER_TEMP/pr.diff" 2>/dev/null || git show HEAD > "$RUNNER_TEMP/pr.diff"
+          fi
           lines=$(wc -l < "$RUNNER_TEMP/pr.diff")
-          echo "PR diff: $lines lines"
-          if [ "$lines" -eq 0 ]; then echo "::notice::No diff to audit."; exit 0; fi
+          echo "Diff: $lines lines"
+          if [ "$lines" -eq 0 ]; then
+            echo "::notice::No diff to audit."
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Run Overreach
+      - name: Run Overreach (no-key deterministic by default)
         id: overreach
+        if: steps.diff.outputs.empty != 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
-          # Optional — pin a provider/model (defaults: auto-resolve, claude-haiku-4-5
+          # Optional provider/model pin (defaults: auto-resolve, claude-haiku-4-5
           # / gpt-4o-mini / glm-5.2 depending on which key is set):
           # SCOPE_PROVIDER: anthropic
           # OVERREACH_MODEL: claude-sonnet-4-6
         run: |
           set +e
-          # Run the CLI and capture ITS exit code (not a surrounding echo's).
           # No API key? The CLI handles it — deterministic regex extraction,
           # zero LLM calls, still catches deps/env/endpoints/cron/files.
-          # stdout -> comment body; stderr (npx install notices / errors) -> run.log.
           npx -y -p overreach@latest overreach-cli \
             --prompt "$(cat "$RUNNER_TEMP/prompt.txt")" --diff "$RUNNER_TEMP/pr.diff" \
             > "$RUNNER_TEMP/cli.out" 2> "$RUNNER_TEMP/run.log"
           code=$?
+          # Surface stderr (npx install notices / errors) in the Actions log.
+          [ -s "$RUNNER_TEMP/run.log" ] && cat "$RUNNER_TEMP/run.log" || true
+          # Parse scope_creep_score from the pretty output: "scope_creep_score = HIGH"
+          score=$(grep -oE 'scope_creep_score = [A-Z]+' "$RUNNER_TEMP/cli.out" | head -1 | awk '{print $NF}')
+          if [ -z "$score" ]; then
+            # CLI did not produce a score — install/provider error. Don't block.
+            echo "score=" >> "$GITHUB_OUTPUT"
+            echo "::warning::Overreach produced no score (install/provider error). Not blocking."
+          else
+            echo "score=$score" >> "$GITHUB_OUTPUT"
+          fi
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Build PR comment
+        if: always() && steps.diff.outputs.empty != 'true'
+        env:
+          PROMPT_SOURCE: ${{ steps.prompt.outputs.source }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
           {
             echo "## 🔍 Overreach — scope-creep audit"
             echo
-            echo "_Prompt source: ${{ steps.prompt.outputs.source }} · ${{ github.event.pull_request.changed_files }} file(s) changed_"
+            echo "_Prompt source: $PROMPT_SOURCE · $CHANGED_FILES file(s) changed · score: \`${{ steps.overreach.outputs.score }}\`_"
             echo
-            cat "$RUNNER_TEMP/cli.out"
+            if [ -s "$RUNNER_TEMP/cli.out" ]; then
+              echo '```'
+              cat "$RUNNER_TEMP/cli.out"
+              echo '```'
+            else
+              echo "_No audit output — see the Actions log._"
+            fi
             echo
             echo "---"
-            echo "_Every finding is deterministic \`actual − authorized\` set arithmetic from (prompt, diff). [Overreach](https://github.com/Naveja00/OverReach)_"
+            echo "_Every finding is deterministic \`actual − authorized\` set arithmetic from (prompt, diff). No inference. [Overreach](https://github.com/Naveja00/OverReach)_"
           } > "$RUNNER_TEMP/comment.md"
-          echo "exit=$code" >> "$GITHUB_OUTPUT"
-          # Surface stderr (npx install notices / errors) in the Actions log.
-          [ -s "$RUNNER_TEMP/run.log" ] && cat "$RUNNER_TEMP/run.log" || true
-          exit 0
 
       - name: Post / update PR comment
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && steps.diff.outputs.empty != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -110,16 +168,25 @@ jobs:
             gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md"
           fi
 
-      - name: Gate — fail the PR on HIGH
-        if: steps.overreach.outputs.exit == '1'
+      - name: Gate — fail the PR on threshold breach
+        id: gate
+        if: steps.overreach.outputs.score != ''
+        env:
+          SCORE: ${{ steps.overreach.outputs.score }}
+          FAIL_ON: ${{ env.FAIL_ON }}
         run: |
-          # Only block if the CLI actually ran and reported HIGH. Guards against an
-          # npx/npm outage masquerading as exit 1 — that would block PRs on an
-          # infrastructure problem, not a real scope-creep finding. (A provider
-          # outage is already handled inside the CLI: it returns skipped/LOW/exit 0.)
-          if grep -q 'scope_creep_score' "$RUNNER_TEMP/comment.md"; then
-            echo "::error::Overreach flagged scope_creep_score=HIGH — the PR adds things the prompt didn't authorize. See the PR comment."
+          # FAIL_ON is a comma list (e.g. "HIGH" or "HIGH,MEDIUM"). Match case-insensitively.
+          score_lower=$(echo "$SCORE" | tr 'A-Z' 'a-z')
+          fail_lower=$(echo "$FAIL_ON" | tr 'A-Z' 'a-z')
+          hit=0
+          IFS=','
+          for level in $fail_lower; do
+            [ "$level" = "$score_lower" ] && hit=1
+          done
+          unset IFS
+          if [ "$hit" -eq 1 ]; then
+            echo "::error::Overreach flagged scope_creep_score=$SCORE — the diff adds things the prompt didn't authorize. See the PR comment."
             exit 1
           else
-            echo "::notice::Overreach did not complete (install/provider error) — not blocking the PR. See the PR comment + Actions log."
+            echo "::notice::Overreach score=$SCORE (fails on: $FAIL_ON) — passed."
           fi

@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["prisma/schema.prisma", "src/api/user.ts"],
+  "features_allowed": ["add bio field to user profile"],
+  "endpoints_allowed": [],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": ["add bio field"]
+}

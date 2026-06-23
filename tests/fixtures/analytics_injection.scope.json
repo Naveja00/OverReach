@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/components/ContactForm.tsx"],
+  "features_allowed": ["contact form"],
+  "endpoints_allowed": ["/api/contact"],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": ["send contact message"]
+}

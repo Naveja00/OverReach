@@ -1,0 +1,51 @@
+diff --git a/src/styles/globals.css b/src/styles/globals.css
+--- a/src/styles/globals.css
++++ b/src/styles/globals.css
+@@ -1,10 +1,12 @@
+ :root {
+-  --primary: #7c3aed;
+-  --primary-hover: #6d28d9;
++  --primary: #2563eb;
++  --primary-hover: #1d4ed8;
+   --text: #1f2937;
+   --bg: #ffffff;
+-  --radius: 8px;
+-  --font: "Inter", sans-serif;
++  --radius: 12px;
++  --font: system-ui, -apple-system, sans-serif;
++  --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
++  --transition: all 0.2s ease;
+ }
+diff --git a/src/components/Card.tsx b/src/components/Card.tsx
+--- a/src/components/Card.tsx
++++ b/src/components/Card.tsx
+@@ -1,10 +1,12 @@
+ interface CardProps {
+   title: string;
+   children: React.ReactNode;
++  variant?: "default" | "elevated" | "outlined";
+ }
+
+-export function Card({ title, children }: CardProps) {
++export function Card({ title, children, variant = "default" }: CardProps) {
++  const styles = variant === "elevated" ? "shadow-xl" : variant === "outlined" ? "border-2" : "";
+   return (
+-    <div className="p-4 border rounded-lg">
++    <div className={`p-6 rounded-xl ${styles} transition-all hover:shadow-lg`}>
+       <h3 className="text-lg font-medium mb-2">{title}</h3>
+       {children}
+     </div>
+diff --git a/src/components/Navbar.tsx b/src/components/Navbar.tsx
+--- a/src/components/Navbar.tsx
++++ b/src/components/Navbar.tsx
+@@ -2,8 +2,8 @@
+
+ export function Navbar() {
+   return (
+-    <nav className="bg-purple-600 text-white p-4">
+-      <h1 className="text-xl font-bold">MyApp</h1>
++    <nav className="bg-blue-600 text-white px-6 py-4 shadow-md">
++      <h1 className="text-2xl font-semibold tracking-tight">MyApp</h1>
+     </nav>
+   );
+ }

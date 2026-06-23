@@ -1,0 +1,36 @@
+diff --git a/src/services/api.ts b/src/services/api.ts
+--- a/src/services/api.ts
++++ b/src/services/api.ts
+@@ -1,12 +1,14 @@
+-import axios from "axios";
++import ky from "ky";
++import pRetry from "p-retry";
+
+ const API_BASE = "/api/v1";
+
+ export async function getUsers() {
+-  const { data } = await axios.get(`${API_BASE}/users`);
+-  return data;
++  return pRetry(() => ky.get(`${API_BASE}/users`).json(), { retries: 3 });
+ }
+
+ export async function getUser(id: string) {
+-  const { data } = await axios.get(`${API_BASE}/users/${id}`);
+-  return data;
++  return pRetry(() => ky.get(`${API_BASE}/users/${id}`).json(), { retries: 3 });
+ }
++
++export async function deleteUser(id: string) {
++  return ky.delete(`${API_BASE}/users/${id}`).json();
++}
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -8,6 +8,7 @@
+   "dependencies": {
+     "react": "^19.0.0",
+-    "axios": "^1.7.0"
++    "ky": "^1.7.0",
++    "p-retry": "^6.2.0"
+   }
+ }

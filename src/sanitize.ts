@@ -115,7 +115,7 @@ const MODEL_ALLOW = /^[A-Za-z0-9._\-:]{1,64}$/; // model ids like glm-5.2, gpt-4
 const PROVIDER_ALLOW = new Set(["anthropic", "openai", "ollama", "override", "unknown"]);
 const LANG_ALLOW = new Set(["python", "typescript", "javascript", "auto", "unknown"]);
 const KIND_ALLOW = new Set<FindingKind>([
-  "scope.file", "scope.feature", "scope.dep", "scope.endpoint", "scope.env", "scope.cron",
+  "scope.file", "scope.feature", "scope.dep", "scope.endpoint", "scope.env", "scope.cron", "scope.listener",
   "contract.expansion", "contract.expired", "handoff.context", "handoff.reasoning",
 ]);
 

@@ -74,17 +74,24 @@ async function main() {
     ok("score is HIGH", r.scope_creep_score === "HIGH", `got ${r.scope_creep_score}`);
   }
 
-  // â”€â”€ [E2] overreach, MISSPELLED prompt â€” proves Stage 1 deciphers typos â”€â”€â”€â”€â”€â”€
+  // â”€â”€ [E2] overreach, MISSPELLED prompt â€” proves the pipeline is TYPO-ROBUST â”€â”€â”€â”€â”€â”€
+  // The guarantee under test is NOT "Stage 1 corrects spelling" (that drifts â€”
+  // glm-5.2 stopped correcting 'setings'->'settings' on 2026-06-23). It is: a
+  // misspelled/uncorrected scope must NOT false-flag in-scope work, while real
+  // smuggling is still caught. Stage 3 authorization is typo-tolerant
+  // (deterministic Damerau-Levenshtein, common-word guarded), so this holds
+  // whether or not Stage 1 corrected the typo. See taxonomy_tests.ts [T24] for
+  // the zero-cloud proof of the same property.
   console.log("\n[E2] overreach fixture, MISSPELLED prompt â€” 'add a logn form to the setings page'");
   {
     const diff = load("tests/fixtures/login_form_stripe.diff");
     const r = await checkOverreach("add a logn form to the setings page", diff);
     console.log("    extracted scope:", JSON.stringify(r.scope));
     console.log(`    findings: ${r.findings.length} | score: ${r.scope_creep_score} | summary: ${r.summary}`);
-    ok("deciphers 'setings' -> settings (scope names settings anywhere)", r.scope.files_allowed.some((f) => /setting/i.test(f)) || r.scope.features_allowed.some((f) => /setting/i.test(f)), `files: ${JSON.stringify(r.scope.files_allowed)} features: ${JSON.stringify(r.scope.features_allowed)}`);
-    ok("deciphers 'logn form' -> login form (scope names login form)", r.scope.features_allowed.some((f) => /logn|login/i.test(f)), `features_allowed: ${JSON.stringify(r.scope.features_allowed)}`);
+    ok("robust to typo: does NOT false-flag the in-scope LoginForm", !r.findings.some((f) => f.kind === "scope.feature" && /LoginForm/i.test(f.evidence)), `findings: ${r.findings.map((f) => f.kind + ":" + f.evidence).join(", ")}`);
     ok("still flags the smuggled stripe dep", r.findings.some((f) => f.kind === "scope.dep" && /stripe/i.test(f.evidence)));
     ok("still flags the smuggled STRIPE_SECRET env", r.findings.some((f) => f.kind === "scope.env" && /STRIPE_SECRET/i.test(f.evidence)));
+    ok("still flags the smuggled /api/checkout endpoint", r.findings.some((f) => f.kind === "scope.endpoint" && /checkout/i.test(f.evidence)));
     ok("score is HIGH", r.scope_creep_score === "HIGH", `got ${r.scope_creep_score}`);
   }
 

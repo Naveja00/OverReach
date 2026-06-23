@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/services/api.ts"],
+  "features_allowed": ["add retry logic to API calls"],
+  "endpoints_allowed": [],
+  "deps_allowed": ["p-retry"],
+  "env_allowed": [],
+  "behavioral_changes_allowed": ["retry failed requests"]
+}

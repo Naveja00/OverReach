@@ -24,7 +24,7 @@ function ok(name: string, cond: boolean, detail?: string) {
 const emptyScope: Scope = { files_allowed: [], features_allowed: [], endpoints_allowed: [], deps_allowed: [], env_allowed: [], behavioral_changes_allowed: [] };
 
 function sum(a: Actual): number {
-  return a.files_changed.length + a.symbols_added.length + a.imports_added.length + a.env_vars_added.length + a.endpoints_added.length + a.cron_added.length + a.new_deps.length;
+  return a.files_changed.length + a.symbols_added.length + a.imports_added.length + a.env_vars_added.length + a.endpoints_added.length + a.cron_added.length + a.new_deps.length + a.listeners_added.length;
 }
 
 async function main() {

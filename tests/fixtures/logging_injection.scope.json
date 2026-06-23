@@ -1,0 +1,8 @@
+{
+  "files_allowed": ["src/api/products.go"],
+  "features_allowed": ["list products endpoint"],
+  "endpoints_allowed": ["/api/products"],
+  "deps_allowed": [],
+  "env_allowed": [],
+  "behavioral_changes_allowed": ["return products as JSON"]
+}

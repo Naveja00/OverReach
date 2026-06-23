@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://overreach.dev/spec/0.1.0/SCHEMA.json",
+  "title": "Overreach Protocol v0.1.0",
+  "description": "Machine-readable schemas for the Overreach coordination protocol. The reference implementation is the npm package `overreach` v0.4.0; this schema matches its on-disk shapes. Breaking changes expected until v1.0.",
+  "$defs": {
+    "isoTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "creepScore": {
+      "type": "string",
+      "enum": ["LOW", "MEDIUM", "HIGH"]
+    },
+    "scopeMode": {
+      "type": "string",
+      "enum": ["dsl", "inferred"]
+    },
+    "claimStatus": {
+      "type": "string",
+      "enum": ["proposed", "locked", "completed", "rejected"]
+    },
+    "resolutionStrategy": {
+      "type": "string",
+      "enum": ["block", "escalate"]
+    },
+    "conflictStatus": {
+      "type": "string",
+      "enum": ["open", "resolved"]
+    },
+    "durationString": {
+      "description": "Either (\\d+)(m|h|d) or an ISO 8601 timestamp. Default '2h'.",
+      "type": "string",
+      "oneOf": [
+        { "pattern": "^\\d+(m|h|d)$" },
+        { "format": "date-time" }
+      ]
+    },
+    "ScopeDSL": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": { "type": "array", "items": { "type": "string" } },
+            "modify": { "type": "array", "items": { "type": "string" } },
+            "delete": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "dependencies": { "type": "array", "items": { "type": "string" } },
+        "env_vars": { "type": "array", "items": { "type": "string" } },
+        "api_routes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "Scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "files_allowed": { "type": "array", "items": { "type": "string" } },
+        "features_allowed": { "type": "array", "items": { "type": "string" } },
+        "endpoints_allowed": { "type": "array", "items": { "type": "string" } },
+        "deps_allowed": { "type": "array", "items": { "type": "string" } },
+        "env_allowed": { "type": "array", "items": { "type": "string" } },
+        "behavioral_changes_allowed": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": [
+        "files_allowed",
+        "features_allowed",
+        "endpoints_allowed",
+        "deps_allowed",
+        "env_allowed",
+        "behavioral_changes_allowed"
+      ]
+    },
+    "ScopeClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": { "type": "string" },
+        "mode": { "const": "dsl" },
+        "confidence": { "const": 1.0, "type": "number" },
+        "agent": { "type": "string" },
+        "task": { "type": "string", "maxLength": 203 },
+        "scope": { "$ref": "#/$defs/ScopeDSL" },
+        "parent_claim": { "type": "string" },
+        "status": { "$ref": "#/$defs/claimStatus" },
+        "created_at": { "$ref": "#/$defs/isoTimestamp" },
+        "expires_at": { "$ref": "#/$defs/isoTimestamp" }
+      },
+      "required": ["claim_id", "mode", "confidence", "agent", "task", "scope", "status", "created_at", "expires_at"]
+    },
+    "ScopeClaimsFile": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ScopeClaim" }
+    },
+    "FileClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string" },
+        "agent": { "type": "string" },
+        "task": { "type": "string" },
+        "claimed_at": { "$ref": "#/$defs/isoTimestamp" },
+        "expires_at": { "$ref": "#/$defs/isoTimestamp" }
+      },
+      "required": ["file", "agent", "task", "claimed_at", "expires_at"]
+    },
+    "FileClaimsFile": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/FileClaim" }
+    },
+    "LedgerEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract_id": { "type": "string" },
+        "agent": { "type": "string" },
+        "task": { "type": "string", "maxLength": 203 },
+        "task_id": { "type": "string" },
+        "issue_ref": { "type": "string" },
+        "files_touched": { "type": "array", "items": { "type": "string" } },
+        "findings_count": { "type": "integer", "minimum": 0 },
+        "score": { "$ref": "#/$defs/creepScore" },
+        "mode": { "$ref": "#/$defs/scopeMode" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "claim_id": { "type": "string" },
+        "at": { "$ref": "#/$defs/isoTimestamp" }
+      },
+      "required": ["agent", "task", "files_touched", "findings_count", "score", "at"]
+    },
+    "LedgerFile": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/LedgerEntry" }
+    },
+    "ConflictResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": { "$ref": "#/$defs/resolutionStrategy" },
+        "resolved_at": { "$ref": "#/$defs/isoTimestamp" },
+        "resolved_by": { "type": "string" },
+        "detail": { "type": "string" }
+      },
+      "required": ["strategy", "resolved_at", "resolved_by", "detail"]
+    },
+    "ConflictRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conflict_id": { "type": "string" },
+        "files": { "type": "array", "items": { "type": "string" } },
+        "agents": { "type": "array", "items": { "type": "string" } },
+        "claim_ids": { "type": "array", "items": { "type": "string" } },
+        "detected_at": { "$ref": "#/$defs/isoTimestamp" },
+        "status": { "$ref": "#/$defs/conflictStatus" },
+        "resolution": { "$ref": "#/$defs/ConflictResolution" }
+      },
+      "required": ["conflict_id", "files", "agents", "claim_ids", "detected_at", "status"]
+    },
+    "ConflictsFile": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ConflictRecord" }
+    },
+    "Config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string" },
+        "coordination": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ledger": { "type": "string" },
+            "claims": { "type": "string" },
+            "prompt": { "type": "string" }
+          }
+        },
+        "rules": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "claim_before_editing": { "type": "boolean" },
+            "check_conflicts_before_start": { "type": "boolean" },
+            "auto_log_to_ledger": { "type": "boolean" },
+            "default_claim_duration": { "$ref": "#/$defs/durationString" }
+          }
+        }
+      },
+      "required": ["version", "coordination", "rules"]
+    },
+    "DelegationLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract_id": { "type": "string" },
+        "agent": { "type": "string" },
+        "task": { "type": "string" },
+        "scope_summary": { "type": "string" },
+        "files_touched": { "type": "array", "items": { "type": "string" } },
+        "findings_count": { "type": "integer", "minimum": 0 },
+        "score": { "$ref": "#/$defs/creepScore" },
+        "at": { "$ref": "#/$defs/isoTimestamp" }
+      },
+      "required": ["contract_id", "agent", "task", "scope_summary", "files_touched", "findings_count", "score", "at"]
+    },
+    "PriorDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "what": { "type": "string" },
+        "why": { "type": "string" },
+        "by": { "type": "string" },
+        "at": { "$ref": "#/$defs/isoTimestamp" }
+      },
+      "required": ["what", "why", "by", "at"]
+    },
+    "ExecutionContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": "1.0" },
+        "id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "issued_at": { "$ref": "#/$defs/isoTimestamp" },
+        "expires_at": { "$ref": "#/$defs/isoTimestamp" },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "root_human": { "type": "string" },
+            "issuing_agent": { "type": "string" },
+            "target_agent": { "type": "string" }
+          },
+          "required": ["root_human"]
+        },
+        "authorization": { "$ref": "#/$defs/Scope" },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "project_goal": { "type": "string" },
+            "constraints": { "type": "array", "items": { "type": "string" } },
+            "prior_decisions": { "type": "array", "items": { "$ref": "#/$defs/PriorDecision" } },
+            "chain": { "type": "array", "items": { "$ref": "#/$defs/DelegationLink" } }
+          }
+        },
+        "audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prompt_hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+            "scope_extraction_model": { "type": "string" },
+            "reconcile_changed": { "type": "boolean" },
+            "findings_at_issue": { "type": "integer", "minimum": 0 },
+            "parent_contract_id": { "type": "string" }
+          },
+          "required": ["prompt_hash", "scope_extraction_model", "reconcile_changed", "findings_at_issue"]
+        }
+      },
+      "required": ["version", "id", "issued_at", "identity", "authorization", "context", "audit"]
+    }
+  },
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/ScopeClaimsFile" },
+    { "$ref": "#/$defs/FileClaimsFile" },
+    { "$ref": "#/$defs/LedgerFile" },
+    { "$ref": "#/$defs/ConflictsFile" },
+    { "$ref": "#/$defs/Config" },
+    { "$ref": "#/$defs/ScopeClaim" },
+    { "$ref": "#/$defs/FileClaim" },
+    { "$ref": "#/$defs/LedgerEntry" },
+    { "$ref": "#/$defs/ConflictRecord" },
+    { "$ref": "#/$defs/ExecutionContract" }
+  ]
+}

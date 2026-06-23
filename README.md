@@ -39,14 +39,15 @@ one command.
 
 | Finding kind            | Caught when the diff adds...                              |
 | ----------------------- | -------------------------------------------------------- |
-| `scope.dep`             | a package/requirement the prompt didn't name             |
+| `scope.dep`             | a package/requirement the prompt didn't name (npm, pip, go.mod, Cargo, Gemfile, composer) |
 | `scope.env`             | an env var (`process.env.X`, `os.environ`, `.env`)       |
 | `scope.endpoint`        | an HTTP route / handler / `route.ts` file                |
 | `scope.cron`            | a cron / scheduler job                                    |
+| `scope.listener`        | a runtime listener — `app.listen`, `WebSocket.Server`, `process.on`, `window.addEventListener` |
 | `scope.file`            | edits to a file the prompt didn't touch on               |
-| `scope.feature`         | a new top-level symbol/feature beyond the prompt         |
+| `scope.feature`         | a new top-level symbol/feature beyond the prompt — incl. infrastructure resources (terraform `resource`, kubernetes `kind:`, CloudFormation) and SQL `CREATE/ALTER TABLE` |
 
-Severity: env / endpoint / cron = **high** · dep / file = **medium** · feature = **low**.
+Severity: env / endpoint / cron / listener = **high** · dep / file = **medium** · feature = **low**.
 Overall `scope_creep_score`: `HIGH` if any high finding, `MEDIUM` if any medium, else `LOW`.
 
 ### How it works (3 stages)
@@ -59,6 +60,16 @@ Overall `scope_creep_score`: `HIGH` if any high finding, `MEDIUM` if any medium,
 3. **Stage 3 — Comparison (deterministic).** Set arithmetic: `actual - authorized = findings`.
 
 Stages 2 and 3 are pure functions — no inference, no opinion, fully auditable.
+
+> **Typo-tolerant authorization.** A misspelled prompt (`"setings page"`, `"logn
+> form"`) must not produce a *false positive* — flagging in-scope work as creep —
+> just because Stage 1 left the typo uncorrected. Stage 3 authorizes typo-tolerantly:
+> a scope token matches an actual identifier when they're equal, a substring, or
+> within a 1–2 char Damerau-Levenshtein edit, gated by a common-word guard so real
+> words never collide (`auth` won't match `auto`). This is deterministic (edit
+> distance is a pure function) — the engine matches the typo to the real identifier
+> regardless of whether the model corrected it. A wrong *scope* never yields a
+> hallucinated *finding*. (Proven zero-cloud in the [T24] taxonomy suite.)
 
 ### Quick start
 
@@ -333,16 +344,34 @@ into your repo and add your API key as a repository secret. Full setup in
 | Kimi K2.7-Code | 82/82 |
 | MiniMax M3 | 81/82 |
 
+> Per-model scores are **Stage 1** (scope extraction) accuracy as last verified
+> 2026-06-19. Cloud models drift — e.g. GLM 5.2 no longer deciphered the
+> `setings`→`settings` typo as of 2026-06-23 (e2e 16/17). These numbers are
+> evidence the pipeline works across model families, not a live SLA. The product
+> guarantee does not depend on them: **Stages 2 and 3 are pure functions** —
+> every finding is derivable from (prompt, diff) regardless of which model
+> produced the scope. A model that botches Stage 1 produces a looser/incorrect
+> *scope*, never a hallucinated *finding*.
+
 ## Tests (zero API key)
 
 ```bash
 npm test
 ```
 
-153 deterministic assertions. Zero API calls. Covers scope detection, parsers,
+308 deterministic assertions. Zero API calls. Covers scope detection, parsers,
 handoffs, contract narrowing/expiration, file claims, ledger queries, claim
 extension, conflict detection, issue traceability, DSL validation, scope claims,
-parent-child narrowing, DSL fast path, and conflict resolution.
+parent-child narrowing, DSL fast path, conflict resolution, 11 real-world
+scope-creep patterns (analytics injection, config drift, security overreach,
+database creep, docker/infra, django auth, test sprawl, logging injection,
+library swap, css design drift, websocket creep), a 23-case taxonomy matrix
+across runtime surface, dependencies (incl. Rust `Cargo.toml`, Ruby `Gemfile`,
+PHP `composer.json`), file scope, feature creep, infra/ops (terraform `resource`,
+kubernetes `kind:`, CloudFormation, SQL `CREATE/ALTER TABLE`), the sneaky
+smuggling patterns (incl. the 7th finding kind, scope.listener), and a typo-
+robustness group proving a misspelled/uncorrected scope never false-flags in-scope
+work.
 
 ## Architecture
 

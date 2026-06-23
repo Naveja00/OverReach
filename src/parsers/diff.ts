@@ -200,9 +200,15 @@ function symbolAdded(code: string): string | null {
     code.match(/^\s*export\s+class\s+(\w+)/) ||
     code.match(/^\s*export\s+(?:async\s+)?function\s+(\w+)/) ||
     code.match(/^\s*function\s+(\w+)/) ||
-    code.match(/^\s*export\s+const\s+(\w+)/) ||
-    code.match(/^\s*const\s+(\w+)\s*=/) ||
-    code.match(/^\s*(?:const|let|var)\s+(\w+)\s*=/) ||
+    // An exported const is top-level by definition (you can't export a local),
+    // so it is a real module surface — keep it.
+    code.match(/^\s*export\s+const\s+(\w+)\s*=/) ||
+    // A const/let/var assigned a FUNCTION/arrow/class is a real callable symbol
+    // (const startKairos = () => {...}). A bare `const payload = {...}` / `let i`
+    // is a data local, NOT a feature — matching those drowned real symbols under
+    // ~50 locals on a 718-line real-world commit. Only capture function-valued
+    // bindings. (Found on real code: Land-lord-manager 50852ea.)
+    code.match(/^\s*(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:function\b|class\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/) ||
     // Prisma/GraphQL model declarations
     code.match(/^\s*model\s+(\w+)\s*\{/) ||
     // Go: func FuncName(...)
@@ -254,7 +260,7 @@ function depAdded(code: string, file: string): string | null {
     // Standard:    "stripe": "^14.0.0"
     // Alias:       "payments": "npm:stripe@14.0.0"  (hides the real package name)
     const m = code.match(/^\s*"([\w@\-/.]+)"\s*:\s*["'][\^~><=]*\d/);
-    if (m) return m[1];
+    if (m && !PKG_NON_DEP_KEYS.has(m[1])) return m[1];
     const alias = code.match(/^\s*"[\w@\-/.]+"\s*:\s*["']npm:([\w@\-/.]+)@/);
     if (alias) return alias[1];
     return null;
@@ -287,6 +293,17 @@ function depAdded(code: string, file: string): string | null {
   }
   return null;
 }
+
+// package.json/composer.json top-level keys that are NOT dependencies. The dep
+// matcher keys off a digit/semver value, which catches `"stripe": "^14"` but
+// also `"version": "0.1.0"` — so an added/moved version field would false-positive
+// into scope.dep. Skip these. (Found on real code: Land-lord-manager scaffold.)
+const PKG_NON_DEP_KEYS = new Set([
+  "version", "name", "description", "type", "license", "license-file", "author",
+  "authors", "main", "module", "browser", "types", "typings", "exports", "imports",
+  "private", "workspaces", "config", "funding", "repository", "homepage", "bugs",
+  "keywords", "sideEffects", "bin", "man", "preferGlobal", "os", "cpu", "engineStrict",
+]);
 
 // Cargo.toml keys that are NOT dependencies ([package]/[profile]/[workspace]
 // config fields). Seeing one added is not a smuggled dep. Finite and

@@ -579,4 +579,38 @@ export async function runTaxonomyTests(
     ok("does NOT flag DATABASE_URL (only mentioned in a comment)", !has(r, "scope.env", /DATABASE_URL/i));
     ok("score is HIGH (smuggling caught; comment ignored)", r.scope_creep_score === "HIGH");
   }
+
+  // [T25i] package.json "version": "0.1.0" is a config field, not a dependency.
+  // Found on real code (Land-lord-manager scaffold): the digit-valued matcher
+  // was catching the version field as a smuggled dep.
+  console.log("[T25i] package.json version/name fields are NOT deps");
+  {
+    const r = await checkOverreach(
+      "fix the bug in src/app.ts",
+      "+++ b/package.json\n+  \"name\": \"landlord\",\n+  \"version\": \"0.1.0\",\n+  \"stripe\": \"^14.0.0\",\n",
+      { scopeOverride: scope({ files_allowed: ["src/app.ts"] }) },
+    );
+    ok("does NOT flag 'version' as a dep (config field)", !has(r, "scope.dep", /^version$/));
+    ok("does NOT flag 'name' as a dep (config field)", !has(r, "scope.dep", /^name$/));
+    ok("still catches the smuggled stripe dep", has(r, "scope.dep", /stripe/i));
+  }
+
+  // [T25j] A const assigned a data literal is a LOCAL, not a feature; a const
+  // assigned a function/arrow IS a real symbol. Found on real code: a 718-line
+  // AI commit produced ~50 feature findings, mostly data locals, drowning the
+  // real new functions. Now only function-valued bindings are captured.
+  console.log("[T25j] data-local consts are NOT features; function/arrow consts ARE");
+  {
+    const r = await checkOverreach(
+      "add a profile page",
+      "+++ b/src/profile.tsx\n+const payload = { a: 1 };\n+let counter = 0;\n+const result = items.map(x => x);\n+const handleSubmit = async (e) => {};\n+const validateForm = (data) => !!data;\n+const Notifier = class { send() {} };\n",
+      { scopeOverride: scope({ files_allowed: ["src/profile.tsx"], features_allowed: ["profile page"] }) },
+    );
+    ok("does NOT flag data local 'payload'", !has(r, "scope.feature", /payload/));
+    ok("does NOT flag data local 'counter'", !has(r, "scope.feature", /counter/));
+    ok("does NOT flag data local 'result' (map returns data, not a fn decl)", !has(r, "scope.feature", /^result$/));
+    ok("flags function-valued const 'handleSubmit' (arrow)", has(r, "scope.feature", /handleSubmit/));
+    ok("flags function-valued const 'validateForm' (arrow)", has(r, "scope.feature", /validateForm/));
+    ok("flags class-valued const 'Notifier'", has(r, "scope.feature", /Notifier/));
+  }
 }

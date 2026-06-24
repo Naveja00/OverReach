@@ -220,6 +220,38 @@ npx -y -p overreach overreach-cli ledger
 npx -y -p overreach overreach-cli status
 ```
 
+### Catch-up (what did I miss while away)
+
+When an agent has been idle and comes back, it doesn't need to re-read the whole
+ledger — it can ask for just the **delta** since its own last entry. Deterministic,
+zero API cost, same "can't lie to you" guarantee as the rest of the engine.
+
+```bash
+# What happened since "claude" last checked in (reads claude's most recent
+# ledger entry as the cutoff, returns only newer work)
+npx -y -p overreach overreach-cli status --since-agent claude
+
+# Entries after an explicit timestamp (ISO-8601, UTC)
+npx -y -p overreach overreach-cli ledger --since 2026-06-23T14:00:00Z
+
+# Pipe the delta to another agent as JSON
+npx -y -p overreach overreach-cli ledger --since-agent claude --json
+```
+
+Output framing:
+
+```
+Work since claude last checked in (2026-06-23T14:00:00.000Z) — 1 new entry:
+1. [codex] add webhook (HIGH, 2 findings, files: src/api/wh.ts) — 2026-06-23T16:00:00.000Z
+```
+
+Notes:
+- `--since-agent` resolves to that agent's most recent `at` timestamp; unknown agents
+  fall back to the full ledger with a note (`no prior work recorded by "..." — showing everything`).
+- `--since` is normalized to canonical ISO; an unparseable value exits with code 2.
+- Combine both — the **later** cutoff wins, so you never re-see work you already saw.
+- The cutoff is **exclusive**: an entry at exactly the agent's last timestamp is not re-reported.
+
 ### Traceability (who broke what)
 
 Every ledger entry can carry a `task_id` and `issue_ref`, so you can trace any file

@@ -43,6 +43,8 @@ interface Args {
   expires?: string;
   taskId?: string;
   issueRef?: string;
+  since?: string;
+  sinceAgent?: string;
   json: boolean;
   emitContract: boolean;
   noCache: boolean;
@@ -74,6 +76,8 @@ function parseArgs(argv: string[]): Args {
       case "--ledger-append": a.ledgerAppend = true; break;
       case "--task-id": a.taskId = next(); break;
       case "--issue-ref": a.issueRef = next(); break;
+      case "--since": a.since = next(); break;
+      case "--since-agent": a.sinceAgent = next(); break;
       case "demo": a.demo = true; break;
       case "init": a.init = true; break;
       case "ledger": a.ledger = true; break;
@@ -88,6 +92,8 @@ function parseArgs(argv: string[]): Args {
         else if (arg.startsWith("--expires=")) a.expires = arg.slice("--expires=".length);
         else if (arg.startsWith("--task-id=")) a.taskId = arg.slice("--task-id=".length);
         else if (arg.startsWith("--issue-ref=")) a.issueRef = arg.slice("--issue-ref=".length);
+        else if (arg.startsWith("--since=")) a.since = arg.slice("--since=".length);
+        else if (arg.startsWith("--since-agent=")) a.sinceAgent = arg.slice("--since-agent=".length);
         else { console.error(`unknown argument: ${arg}`); process.exit(2); }
     }
   }
@@ -108,6 +114,11 @@ Agent-to-agent:
   overreach --prompt "..." --emit-contract --json > contract.json
   overreach --prompt "child task" --parent-contract contract.json --agent-name "agent-b"
 
+Catch-up (what did I miss while away):
+  overreach status --since-agent claude            work since claude last checked in
+  overreach ledger --since 2026-06-23T14:00:00Z    entries after a timestamp
+  overreach ledger --since-agent claude --json     pipe the delta to another agent
+
 Options:
   -p, --prompt <text>          the instruction that authorized the work
   -d, --diff <path>            diff file (default: read from stdin)
@@ -117,6 +128,8 @@ Options:
   --parent-contract <path>     parent contract JSON (validates child narrows parent)
   --agent-name <name>          name of the agent executing this work (for chain)
   --no-cache                   bypass the scope cache (force a fresh Stage 1 call)
+  --since <iso8601>             only ledger entries after this timestamp
+  --since-agent <name>          only entries after that agent's most recent entry
   demo                         run the canonical login-form-smuggles-Stripe demo
   init                         install a git pre-commit hook + .overreach/prompt.md
 
@@ -230,12 +243,29 @@ async function main() {
 
   // ── ledger ──────────────────────────────────────────────────────────────
   if (args.ledger) {
-    const { readLedger, formatLedgerForAgent } = await import("./ledger.js");
+    const { readLedger, formatLedgerForAgent, filterSince, resolveSinceCutoff, formatLedgerDelta } = await import("./ledger.js");
     const { execSync } = await import("node:child_process");
     let root: string;
     try { root = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim(); }
     catch { console.error("Not a git repository."); process.exit(1); }
-    const entries = readLedger(root);
+    let entries = readLedger(root);
+    if (args.since !== undefined || args.sinceAgent !== undefined) {
+      const r = resolveSinceCutoff({ since: args.since, sinceAgent: args.sinceAgent }, entries);
+      if (r.invalidSince) { console.error(`--since could not be parsed as a timestamp: ${r.invalidSince}`); process.exit(2); }
+      if (r.cutoff) {
+        entries = filterSince(entries, r.cutoff);
+        if (args.json) console.log(JSON.stringify(entries, null, 2));
+        else console.log(formatLedgerDelta(entries, { cutoff: r.cutoff, sinceAgent: args.sinceAgent, note: r.note }));
+      } else {
+        // no cutoff resolvable (e.g. --since-agent with no prior entries) — full ledger + note
+        if (args.json) console.log(JSON.stringify(entries, null, 2));
+        else {
+          if (r.note) console.log(`(${r.note})`);
+          console.log(formatLedgerForAgent(entries));
+        }
+      }
+      return;
+    }
     if (args.json) {
       console.log(JSON.stringify(entries, null, 2));
     } else {
@@ -246,7 +276,7 @@ async function main() {
 
   // ── status ─────────────────────────────────────────────────────────────
   if (args.status) {
-    const { readLedger, formatLedgerForAgent } = await import("./ledger.js");
+    const { readLedger, formatLedgerForAgent, filterSince, resolveSinceCutoff, formatLedgerDelta } = await import("./ledger.js");
     const { readClaims, formatClaims } = await import("./claims.js");
     const { execSync } = await import("node:child_process");
     let root: string;
@@ -256,8 +286,21 @@ async function main() {
     console.log(c(ANSI.bold)("File claims:"));
     console.log(formatClaims(readClaims(root)));
     console.log("");
-    console.log(c(ANSI.bold)("Ledger:"));
-    console.log(formatLedgerForAgent(readLedger(root)));
+    const entries = readLedger(root);
+    if (args.since !== undefined || args.sinceAgent !== undefined) {
+      const r = resolveSinceCutoff({ since: args.since, sinceAgent: args.sinceAgent }, entries);
+      if (r.invalidSince) { console.error(`--since could not be parsed as a timestamp: ${r.invalidSince}`); process.exit(2); }
+      console.log(c(ANSI.bold)("Ledger (since last check-in):"));
+      if (r.cutoff) {
+        console.log(formatLedgerDelta(filterSince(entries, r.cutoff), { cutoff: r.cutoff, sinceAgent: args.sinceAgent, note: r.note }));
+      } else {
+        if (r.note) console.log(`(${r.note})`);
+        console.log(formatLedgerForAgent(entries));
+      }
+    } else {
+      console.log(c(ANSI.bold)("Ledger:"));
+      console.log(formatLedgerForAgent(entries));
+    }
     return;
   }
 

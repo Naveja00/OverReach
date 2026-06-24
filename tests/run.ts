@@ -9,6 +9,7 @@ import type { Scope, CheckResult } from "../src/types.js";
 import { runDSLTests } from "./dsl_tests.js";
 import { runRealWorldTests } from "./real_world_tests.js";
 import { runTaxonomyTests } from "./taxonomy_tests.js";
+import { runLedgerSinceTests } from "./ledger_since_tests.js";
 
 let failures = 0;
 let passes = 0;
@@ -482,6 +483,7 @@ async function main() {
   await runDSLTests(ok, load, loadScope);
   await runRealWorldTests(ok, load, loadScope);
   await runTaxonomyTests(ok);
+  await runLedgerSinceTests(ok);
 
   // -- Summary ------------------------------------------------------------------
   console.log(`\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`);

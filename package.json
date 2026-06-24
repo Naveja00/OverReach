@@ -1,6 +1,6 @@
 {
   "name": "overreach",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Scope audit + multi-agent coordination for AI coding agents. Catches scope creep in diffs and coordinates Claude Code, Cursor, and Codex on the same repo.",
   "type": "module",
   "license": "MIT",

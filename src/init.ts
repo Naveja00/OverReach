@@ -9,8 +9,9 @@
 // pass through. Use `git commit --no-verify` to skip (escape hatch, not recommended).
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { sendInitPing } from "./telemetry.js";
 
 const ANSI = {
@@ -336,10 +337,21 @@ ${GITIGNORE_MARKER}
   console.log(c(ANSI.dim)("  Works across Claude Code, Cursor, Codex — any agent that reads MCP tools.\n"));
 
   // Anonymous, fire-once telemetry. Opt-out: OVERREACH_TELEMETRY=0 or DO_NOT_TRACK=1.
+  // Resolve package.json robustly: source layout is src/init.ts -> ../package.json
+  // (repo root), but the published build is dist/src/init.js -> ../../package.json
+  // (package root). Try both so the version is reported correctly in production,
+  // not as "unknown".
   try {
-    const pkgPath = new URL("../package.json", import.meta.url);
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-    sendInitPing(gitRoot, pkg.version);
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const candidates = [join(dir, "..", "package.json"), join(dir, "..", "..", "package.json")];
+    let version = "unknown";
+    for (const p of candidates) {
+      if (existsSync(p)) {
+        try { version = JSON.parse(readFileSync(p, "utf-8")).version ?? "unknown"; } catch {}
+        break;
+      }
+    }
+    sendInitPing(gitRoot, version);
   } catch {
     sendInitPing(gitRoot, "unknown");
   }

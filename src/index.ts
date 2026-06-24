@@ -13,6 +13,9 @@ import { readLedger, appendLedger, formatLedgerForAgent, queryByFile, fileOwners
 import { claimFiles, releaseClaims, extendClaim, checkConflicts, readClaims, formatClaims } from "./claims.js";
 import { claimScope, validateDSL, listActiveClaims, completeClaim } from "./scope_dsl.js";
 import { resolveConflict, recordConflict, listOpenConflicts } from "./resolve.js";
+import { checkIn } from "./check_in.js";
+import { diagnoseCollision } from "./collide.js";
+import { coordCheck } from "./coord_check.js";
 import { PORT, HOST } from "./config.js";
 
 // Read the version from package.json so serverInfo / health stay in sync with
@@ -296,6 +299,54 @@ server.tool(
       return { content: [{ type: "text" as const, text: "No open conflicts." }] };
     }
     return { content: [{ type: "text" as const, text: JSON.stringify(conflicts, null, 2) }] };
+  },
+);
+
+server.tool(
+  "check_in",
+  "Same-PC live awareness for multi-agent coordination. When several agents run on one machine they share the filesystem, so re-reading .overreach/ is near-real-time awareness of what every agent is doing — no server. Call this between big blocks of work: it renews your claims (so they don't expire while you work — a heartbeat), shows what every agent is currently working on, the ledger delta since YOUR last check-in, and any open conflicts involving you. Deterministic, zero API cost.",
+  {
+    project_root: z.string().describe("Absolute path to the project root (where .overreach/ lives)."),
+    agent_name: z.string().describe("Your agent name/identifier (who is checking in)."),
+    diagnose: z.boolean().optional().describe("If true, also run collision diagnostics on every open conflict involving this agent."),
+  },
+  async (args) => {
+    const report = checkIn(args.project_root, args.agent_name);
+    const out: Record<string, unknown> = { ...report };
+    if (args.diagnose && report.conflicts.length > 0) {
+      out.diagnostics = report.conflicts
+        .map((c) => (c.files[0] ? diagnoseCollision(args.project_root, c.files[0], c.agents) : null))
+        .filter(Boolean);
+    }
+    return { content: [{ type: "text" as const, text: JSON.stringify(out, null, 2) }] };
+  },
+);
+
+server.tool(
+  "coord_check",
+  "CI coordination gate. The deterministic check the CI gate runs against a PR's changed files and the committed .overreach/ state. Reports files in the diff that have an OPEN (unresolved) conflict (blocked — merging touches a known collision), and files with no active claim (advisory, or blocking in strict mode). Enforcement lives in CI — the one place an agent can't skip — so coordination becomes harder to bypass without becoming a server. Returns a CoordCheckReport; `blocked` is true when the gate should fail the PR.",
+  {
+    project_root: z.string().describe("Absolute path to the project root."),
+    files: z.array(z.string()).describe("Files changed in the PR (relative to project root)."),
+    strict: z.boolean().optional().describe("If true, unclaimed files also block the gate. Default false (unclaimed is advisory)."),
+  },
+  async (args) => {
+    const report = coordCheck(args.project_root, args.files, args.strict);
+    return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
+  },
+);
+
+server.tool(
+  "diagnose_collision",
+  "Diagnose a file collision between agents. When two agents want the same file, this reports each agent's DECLARED intent (task + create/modify/delete + their declared deps/env/routes, from their scope/file claims) plus the file's actual top-level symbols and a split suggestion. Deterministic — declared facts + file structure only. No merge engine, no inference about which agent wrote which symbol.",
+  {
+    project_root: z.string().describe("Absolute path to the project root."),
+    file: z.string().describe("The contested file path (relative to project root)."),
+    agents: z.array(z.string()).describe("The agents contesting the file (e.g. from a conflict record's `agents`)."),
+  },
+  async (args) => {
+    const report = diagnoseCollision(args.project_root, args.file, args.agents);
+    return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
   },
 );
 

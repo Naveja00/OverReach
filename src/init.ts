@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+import { sendInitPing } from "./telemetry.js";
 
 const ANSI = {
   green: (s: string) => `\x1b[32m${s}\x1b[0m`,
@@ -255,6 +256,7 @@ ${CODEX_MARKER}
 ${GITIGNORE_MARKER}
 .overreach/scope-cache/
 .overreach/claims.json
+.overreach/.telemetry-sent
 .overreach/*.lock
 ${GITIGNORE_MARKER}
 `;
@@ -332,4 +334,13 @@ ${GITIGNORE_MARKER}
   console.log(`  Agents should call ${c(ANSI.yellow)("check_conflicts")} before starting work`);
   console.log(`  and ${c(ANSI.yellow)("claim_files")} to prevent file collisions.`);
   console.log(c(ANSI.dim)("  Works across Claude Code, Cursor, Codex — any agent that reads MCP tools.\n"));
+
+  // Anonymous, fire-once telemetry. Opt-out: OVERREACH_TELEMETRY=0 or DO_NOT_TRACK=1.
+  try {
+    const pkgPath = new URL("../package.json", import.meta.url);
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    sendInitPing(gitRoot, pkg.version);
+  } catch {
+    sendInitPing(gitRoot, "unknown");
+  }
 }

@@ -196,7 +196,10 @@ function listener(code: string): string | null {
   return null;
 }
 
-function symbolAdded(code: string): string | null {
+// Exported so collision diagnostics (src/collide.ts) can reuse the exact same
+// top-level-symbol detector on full file content (per-line), instead of a
+// second regex set. No behavior change for the diff path.
+export function symbolAdded(code: string): string | null {
   const m =
     code.match(/^\s*async\s+def\s+(\w+)/) ||
     code.match(/^\s*def\s+(\w+)/) ||

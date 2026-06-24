@@ -1,0 +1,8 @@
+name = "overreach-telemetry"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "overreach-telemetry"
+database_id = "" # fill after `wrangler d1 create overreach-telemetry`

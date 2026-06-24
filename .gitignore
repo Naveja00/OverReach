@@ -18,3 +18,5 @@ overreach-model-results.json
 *.log
 .DS_Store
 Thumbs.db
+# wrangler local dev cache (miniflare D1)
+.wrangler/

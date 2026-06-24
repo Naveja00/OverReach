@@ -53,11 +53,15 @@ interface Args {
   init: boolean;
   ledger: boolean;
   status: boolean;
+  checkIn: boolean;
+  diagnose: boolean;
+  coordCheck: boolean;
+  strict: boolean;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { json: false, emitContract: false, noCache: false, ledgerAppend: false, demo: false, init: false, ledger: false, status: false, help: false };
+  const a: Args = { json: false, emitContract: false, noCache: false, ledgerAppend: false, demo: false, init: false, ledger: false, status: false, checkIn: false, diagnose: false, coordCheck: false, strict: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = () => argv[++i];
@@ -82,6 +86,10 @@ function parseArgs(argv: string[]): Args {
       case "init": a.init = true; break;
       case "ledger": a.ledger = true; break;
       case "status": a.status = true; break;
+      case "check-in": a.checkIn = true; break;
+      case "coord-check": a.coordCheck = true; break;
+      case "--diagnose": a.diagnose = true; break;
+      case "--strict": a.strict = true; break;
       default:
         if (arg.startsWith("--prompt=")) a.prompt = arg.slice("--prompt=".length);
         else if (arg.startsWith("--prompt-file=")) a.promptFile = arg.slice("--prompt-file=".length);
@@ -118,6 +126,19 @@ Catch-up (what did I miss while away):
   overreach status --since-agent claude            work since claude last checked in
   overreach ledger --since 2026-06-23T14:00:00Z    entries after a timestamp
   overreach ledger --since-agent claude --json     pipe the delta to another agent
+
+Check-in (same-PC live awareness — agents on one machine share the filesystem,
+so re-reading .overreach/ is near-real-time awareness with no server):
+  overreach check-in --agent-name claude           renew my claims + see what every
+                                                    agent is doing + what I missed
+  overreach check-in --agent-name claude --diagnose  also diagnose any open file
+                                                    collisions involving me
+  overreach check-in --agent-name claude --json      structured JSON for piping
+
+Coordination gate (CI — the one place an agent can't skip):
+  git diff | overreach coord-check                  fail on open conflicts in the diff
+  overreach coord-check --diff pr.diff --strict     also fail on unclaimed files
+  overreach coord-check --diff pr.diff --json       structured JSON for CI
 
 Options:
   -p, --prompt <text>          the instruction that authorized the work
@@ -302,6 +323,67 @@ async function main() {
       console.log(formatLedgerForAgent(entries));
     }
     return;
+  }
+
+  // ── check-in ────────────────────────────────────────────────────────────
+  if (args.checkIn) {
+    if (!args.agentName) { console.error("check-in requires --agent-name (who is checking in)"); process.exit(2); }
+    const { checkIn, formatCheckIn } = await import("./check_in.js");
+    const { diagnoseCollision, formatCollision } = await import("./collide.js");
+    const { execSync } = await import("node:child_process");
+    let root: string;
+    try { root = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim(); }
+    catch { console.error("Not a git repository."); process.exit(1); }
+
+    const report = checkIn(root, args.agentName);
+
+    if (args.json) {
+      const out: Record<string, unknown> = { ...report };
+      if (args.diagnose && report.conflicts.length > 0) {
+        out.diagnostics = report.conflicts
+          .map((c) => (c.files[0] ? diagnoseCollision(root, c.files[0], c.agents) : null))
+          .filter(Boolean);
+      }
+      console.log(JSON.stringify(out, null, 2));
+    } else {
+      console.log(c(ANSI.bold)("Overreach — check-in\n"));
+      console.log(formatCheckIn(report));
+      if (args.diagnose && report.conflicts.length > 0) {
+        for (const c of report.conflicts) {
+          const file = c.files[0];
+          if (!file) continue;
+          console.log("");
+          console.log(formatCollision(diagnoseCollision(root, file, c.agents)));
+        }
+      }
+    }
+    process.exit(0);
+  }
+
+  // ── coord-check (CI coordination gate) ───────────────────────────────────
+  if (args.coordCheck) {
+    const { coordCheck, changedFilesFromDiff, formatCoordCheck } = await import("./coord_check.js");
+    const { execSync } = await import("node:child_process");
+    let root: string;
+    try { root = execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim(); }
+    catch { console.error("Not a git repository."); process.exit(1); }
+
+    const diff = await readDiff(args.diffPath);
+    const files = changedFilesFromDiff(diff);
+    if (files.length === 0) {
+      if (args.json) console.log(JSON.stringify({ files_checked: [], blocked_conflicts: [], unclaimed: [], claimed_by: [], blocked: false }, null, 2));
+      else console.log("Coordination check — no files in the diff.");
+      process.exit(0);
+    }
+
+    const report = coordCheck(root, files, args.strict);
+    if (args.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(c(ANSI.bold)("Overreach — coordination check\n"));
+      console.log(formatCoordCheck(report, args.strict));
+    }
+    process.exit(report.blocked ? 1 : 0);
   }
 
   // ── demo ─────────────────────────────────────────────────────────────────

@@ -305,3 +305,23 @@ export function dslToScope(dsl: ScopeDSL): import("./types.js").Scope {
 export function listActiveClaims(root: string): ScopeClaim[] {
   return purgeExpired(readIndex(root)).filter(c => c.status === "locked" || c.status === "proposed");
 }
+
+/** Renew (heartbeat) one agent's active scope claims so they don't expire while
+ *  the agent is still working. Bumps expires_at to now + duration (default 2h)
+ *  for every locked/proposed claim owned by `agent`. Returns the claim_ids that
+ *  were renewed. Runs under the scopes index file lock. Used by check-in. */
+export function renewScopeClaims(root: string, agent: string, duration?: string): string[] {
+  return withFileLock(indexPath(root), () => {
+    const claims = readIndex(root);
+    const newExpiry = resolveExpiry(duration);
+    const renewed: string[] = [];
+    for (const c of claims) {
+      if (c.agent === agent && (c.status === "locked" || c.status === "proposed")) {
+        c.expires_at = newExpiry;
+        renewed.push(c.claim_id);
+      }
+    }
+    if (renewed.length > 0) writeIndex(root, claims);
+    return renewed;
+  });
+}

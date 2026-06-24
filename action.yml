@@ -39,6 +39,10 @@ inputs:
     description: "Comma-separated scores that fail the PR check (HIGH, MEDIUM, LOW). Default: HIGH."
     required: false
     default: "HIGH"
+  require-claims:
+    description: "Opt-in coordination enforcement. 'true' fails the PR if the diff touches a file with an open (unresolved) conflict; 'strict' also fails on files no agent actively claimed. Default: false (off — existing gates unaffected)."
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -52,6 +56,7 @@ runs:
       shell: bash
       env:
         FAIL_ON: ${{ inputs.fail-on }}
+        REQUIRE_CLAIMS: ${{ inputs.require-claims }}
       run: |
         mkdir -p .github/workflows
         # Only write if absent — never clobber a customized gate.
@@ -79,6 +84,7 @@ runs:
             runs-on: ubuntu-latest
             env:
               FAIL_ON: __FAIL_ON_VALUE__
+              REQUIRE_CLAIMS: __REQUIRE_CLAIMS_VALUE__
             steps:
               - uses: actions/checkout@v4
                 with:
@@ -168,12 +174,43 @@ runs:
                     echo "::error::Overreach flagged scope_creep_score=$SCORE — diff adds unauthorized things. See PR comment."
                     exit 1
                   fi
+              - name: Coordination gate (opt-in)
+                if: env.REQUIRE_CLAIMS != '' && env.REQUIRE_CLAIMS != 'false' && steps.diff.outputs.empty != 'true'
+                env:
+                  REQUIRE_CLAIMS: ${{ env.REQUIRE_CLAIMS }}
+                run: |
+                  strict_flag=""
+                  [ "$REQUIRE_CLAIMS" = "strict" ] && strict_flag="--strict"
+                  # The coordination gate runs against the same PR diff + the
+                  # committed .overreach/ state. Fails (exit 1) if the diff
+                  # touches a file with an open conflict, or in strict mode an
+                  # unclaimed file. Off unless the repo set require-claims.
+                  set +e
+                  npx -y -p overreach@latest overreach-cli coord-check \
+                    --diff "$RUNNER_TEMP/pr.diff" $strict_flag \
+                    > "$RUNNER_TEMP/coord.out" 2> "$RUNNER_TEMP/coord.log"
+                  rc=$?
+                  [ -s "$RUNNER_TEMP/coord.log" ] && cat "$RUNNER_TEMP/coord.log" || true
+                  if [ -s "$RUNNER_TEMP/coord.out" ]; then
+                    {
+                      echo "## 🤝 Overreach — coordination check"
+                      echo
+                      echo '```'
+                      cat "$RUNNER_TEMP/coord.out"
+                      echo '```'
+                    } >> "$RUNNER_TEMP/comment.md"
+                  fi
+                  if [ "$rc" -ne 0 ]; then
+                    echo "::error::Overreach coordination gate blocked this PR (open conflict or unclaimed file). See PR comment."
+                    exit 1
+                  fi
         WORKFLOW_EOF
-          # Bake the chosen fail-on value into the dropped workflow (the
-          # heredoc is single-quoted so GitHub ${{ }} expressions stay literal;
-          # __FAIL_ON_VALUE__ is a plain placeholder safe to sed-replace).
+          # Bake the chosen fail-on + require-claims values into the dropped
+          # workflow (the heredoc is single-quoted so GitHub ${{ }} expressions
+          # stay literal; __*__ are plain placeholders safe to sed-replace).
           sed -i "s/__FAIL_ON_VALUE__/${FAIL_ON}/" .github/workflows/overreach.yml
-          echo "::notice::Wrote .github/workflows/overreach.yml (fail-on: ${FAIL_ON})."
+          sed -i "s/__REQUIRE_CLAIMS_VALUE__/${REQUIRE_CLAIMS}/" .github/workflows/overreach.yml
+          echo "::notice::Wrote .github/workflows/overreach.yml (fail-on: ${FAIL_ON}, require-claims: ${REQUIRE_CLAIMS})."
         fi
 
     - name: Print next steps

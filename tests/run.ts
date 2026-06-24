@@ -10,6 +10,8 @@ import { runDSLTests } from "./dsl_tests.js";
 import { runRealWorldTests } from "./real_world_tests.js";
 import { runTaxonomyTests } from "./taxonomy_tests.js";
 import { runLedgerSinceTests } from "./ledger_since_tests.js";
+import { runCheckInTests } from "./check_in_tests.js";
+import { runCoordCheckTests } from "./coord_check_tests.js";
 
 let failures = 0;
 let passes = 0;
@@ -484,6 +486,8 @@ async function main() {
   await runRealWorldTests(ok, load, loadScope);
   await runTaxonomyTests(ok);
   await runLedgerSinceTests(ok);
+  await runCheckInTests(ok);
+  await runCoordCheckTests(ok);
 
   // -- Summary ------------------------------------------------------------------
   console.log(`\nâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`);

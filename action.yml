@@ -14,7 +14,7 @@
 #       runs-on: ubuntu-latest
 #       steps:
 #         - uses: actions/checkout@v4
-#         - uses: Naveja00/Overreach@v0.4.0
+#         - uses: Naveja00/Overreach@v1
 #           with:
 #             fail-on: HIGH
 #

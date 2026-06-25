@@ -18,5 +18,8 @@ overreach-model-results.json
 *.log
 .DS_Store
 Thumbs.db
+
+# launch / distribution kit — kept locally, not published to the repo
+site/LAUNCH-DISTRIBUTION.md
 # wrangler local dev cache (miniflare D1)
 .wrangler/

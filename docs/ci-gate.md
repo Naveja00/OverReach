@@ -33,7 +33,7 @@ jobs:
           fail-on: HIGH
 ```
 
-This runs `overreach-cli init` (writes `.overreach/`, pre-commit hook,
+This runs `overreach init` (writes `.overreach/`, pre-commit hook,
 `CLAUDE.md` / `.cursorrules` / `codex.md` instructions) and drops
 `.github/workflows/overreach.yml` for you.
 
@@ -110,7 +110,7 @@ the emitted `scope_creep_score` so it can apply the configurable threshold.
 
 - Resolves the prompt (precedence above).
 - Builds the PR diff (`gh pr diff`).
-- Runs `overreach-cli --prompt … --diff …` — no-key deterministic by default,
+- Runs `overreach --prompt … --diff …` — no-key deterministic by default,
   or one LLM call if a key is set (Stage 1, cached by prompt hash so re-runs
   are free).
 - Deterministically parses the diff (Stage 2) and computes `actual − authorized`

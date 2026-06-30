@@ -1,11 +1,12 @@
 {
   "name": "overreach",
-  "version": "0.6.1",
-  "description": "Scope audit + multi-agent coordination for AI coding agents. Catches scope creep in diffs and coordinates Claude Code, Cursor, and Codex on the same repo.",
+  "version": "0.7.0",
+  "description": "AI PR review assistant. Checks what your AI agent actually changed vs what you asked for. Deterministic, evidence-backed, no AI opinions.",
   "type": "module",
   "license": "MIT",
   "bin": {
-    "overreach": "dist/src/index.js",
+    "overreach": "dist/src/cli.js",
+    "overreach-server": "dist/src/index.js",
     "overreach-cli": "dist/src/cli.js"
   },
   "files": [
@@ -14,19 +15,19 @@
     "LICENSE"
   ],
   "keywords": [
-    "mcp",
-    "model-context-protocol",
+    "ai-review",
+    "pr-review",
+    "code-review",
     "ai-coding",
     "scope-creep",
-    "code-review",
-    "multi-agent",
-    "coordination",
     "claude",
     "cursor",
+    "copilot",
     "codex",
-    "agent",
+    "windsurf",
+    "mcp",
     "diff",
-    "file-locking"
+    "ci"
   ],
   "engines": {
     "node": ">=18"

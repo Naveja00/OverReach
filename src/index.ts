@@ -18,11 +18,11 @@ import { diagnoseCollision } from "./collide.js";
 import { coordCheck } from "./coord_check.js";
 import { PORT, HOST } from "./config.js";
 
-// Read the version from package.json so serverInfo / health stay in sync with
-// npm publishes without a manual bump here. Resolves to the root package.json
-// both in dev (tsx src/index.ts) and in the published tarball (dist/src/index.js).
 const require = createRequire(import.meta.url);
-const VERSION: string = require("../../package.json").version;
+let VERSION = "0.0.0";
+try { VERSION = require("../../package.json").version; } catch {
+  try { VERSION = require("../package.json").version; } catch { /* dev fallback */ }
+}
 
 const server = new McpServer({
   name: "overreach",
@@ -354,6 +354,10 @@ server.tool("health", "Health check for the Overreach MCP server.", {}, async ()
   content: [{ type: "text" as const, text: JSON.stringify({ status: "ok", version: VERSION }) }],
 }));
 
+export async function startServer() {
+  return main();
+}
+
 async function main() {
   if (PORT) {
     // Streamable HTTP transport for remote clients.
@@ -389,7 +393,14 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("[overreach] fatal:", err);
-  process.exit(1);
-});
+const isDirectEntry = process.argv[1] && (
+  process.argv[1].endsWith("index.js") ||
+  process.argv[1].endsWith("index.ts") ||
+  process.argv[1].endsWith("overreach-server")
+);
+if (isDirectEntry) {
+  main().catch((err) => {
+    console.error("[overreach] fatal:", err);
+    process.exit(1);
+  });
+}

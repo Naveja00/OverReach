@@ -115,7 +115,7 @@ jobs:
           set +e
           # No API key? The CLI handles it — deterministic regex extraction,
           # zero LLM calls, still catches deps/env/endpoints/cron/files.
-          npx -y -p overreach@latest overreach-cli \
+          npx -y overreach@latest \
             --prompt "$(cat "$RUNNER_TEMP/prompt.txt")" --diff "$RUNNER_TEMP/pr.diff" \
             > "$RUNNER_TEMP/cli.out" 2> "$RUNNER_TEMP/run.log"
           code=$?

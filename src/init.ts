@@ -46,7 +46,7 @@ const HOOK_SCRIPT = `${HOOK_MARKER}
 PROMPT_FILE=".overreach/prompt.md"
 if [ ! -f "$PROMPT_FILE" ]; then
   echo "[overreach] No .overreach/prompt.md found — skipping scope audit."
-  echo "[overreach] Run 'npx -y -p overreach overreach-cli init' to set up."
+  echo "[overreach] Run 'npx -y overreach init' to set up."
 else
   # Skip if the prompt file is still the template (no real prompt written)
   if head -1 "$PROMPT_FILE" | grep -q "^# Overreach"; then
@@ -59,7 +59,7 @@ else
     else
       echo "[overreach] Auditing staged changes against .overreach/prompt.md..."
       AGENT_NAME=\${OVERREACH_AGENT_NAME:-pre-commit}
-      echo "$DIFF" | npx -y -p overreach overreach-cli --prompt-file "$PROMPT_FILE" --agent-name "$AGENT_NAME" --ledger-append
+      echo "$DIFF" | npx -y overreach --prompt-file "$PROMPT_FILE" --agent-name "$AGENT_NAME" --ledger-append
       EXIT_CODE=$?
       if [ $EXIT_CODE -eq 1 ]; then
         echo ""
@@ -142,7 +142,7 @@ ${CLAUDE_MARKER}
 Before committing, audit your staged changes against the task prompt:
 
 \`\`\`
-git diff --staged | npx -y -p overreach overreach-cli --prompt "<the task you were given>"
+git diff --staged | npx -y overreach --prompt "<the task you were given>"
 \`\`\`
 
 If \`scope_creep_score\` is HIGH, remove the unauthorized changes before committing.
@@ -177,7 +177,7 @@ ${CLAUDE_MARKER}
 ${CURSOR_MARKER}
 # Scope audit (Overreach)
 # Before committing, audit your staged changes against the task prompt:
-#   git diff --staged | npx -y -p overreach overreach-cli --prompt "<the task you were given>"
+#   git diff --staged | npx -y overreach --prompt "<the task you were given>"
 # If scope_creep_score is HIGH, remove the unauthorized changes before committing.
 # Do not add dependencies, env vars, endpoints, or cron jobs the prompt did not ask for.
 # Multi-agent: call check_conflicts before starting work to avoid file collisions.
@@ -207,7 +207,7 @@ ${CODEX_MARKER}
 Before committing, audit your staged changes against the task prompt:
 
 \`\`\`
-git diff --staged | npx -y -p overreach overreach-cli --prompt "<the task you were given>"
+git diff --staged | npx -y overreach --prompt "<the task you were given>"
 \`\`\`
 
 If \`scope_creep_score\` is HIGH, remove the unauthorized changes before committing.

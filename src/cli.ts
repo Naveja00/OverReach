@@ -14,6 +14,8 @@
 // the same prompt is free and instant (see src/scope/cache.ts).
 
 import { readFileSync, existsSync } from "node:fs";
+import { createInterface } from "node:readline";
+import { execSync } from "node:child_process";
 import { checkOverreach } from "./tools/check_overreach.js";
 import { resolveProvider, resolveModel } from "./config.js";
 import { getScopeCache, putScopeCache } from "./scope/cache.js";
@@ -57,11 +59,12 @@ interface Args {
   diagnose: boolean;
   coordCheck: boolean;
   strict: boolean;
+  serve: boolean;
   help: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { json: false, emitContract: false, noCache: false, ledgerAppend: false, demo: false, init: false, ledger: false, status: false, checkIn: false, diagnose: false, coordCheck: false, strict: false, help: false };
+  const a: Args = { json: false, emitContract: false, noCache: false, ledgerAppend: false, demo: false, init: false, ledger: false, status: false, checkIn: false, diagnose: false, coordCheck: false, strict: false, serve: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = () => argv[++i];
@@ -90,6 +93,7 @@ function parseArgs(argv: string[]): Args {
       case "coord-check": a.coordCheck = true; break;
       case "--diagnose": a.diagnose = true; break;
       case "--strict": a.strict = true; break;
+      case "--serve": case "serve": a.serve = true; break;
       default:
         if (arg.startsWith("--prompt=")) a.prompt = arg.slice("--prompt=".length);
         else if (arg.startsWith("--prompt-file=")) a.promptFile = arg.slice("--prompt-file=".length);
@@ -108,57 +112,47 @@ function parseArgs(argv: string[]): Args {
   return a;
 }
 
-const HELP = `overreach — audit a diff against the prompt that authorized it.
+const HELP = `overreach — AI PR review assistant
+
+  Review what your AI agent actually changed vs what you asked for.
+  Deterministic checks. No AI opinions. Evidence-backed.
+
+Quick start:
+  overreach                               auto-detect changes, ask what you did
+  overreach demo                          see it in action (no setup needed)
 
 Usage:
-  git diff | overreach --prompt "add a login form to settings"
-  overreach --prompt "..." --diff change.diff
-  overreach --prompt "..." --scope scope.json     zero-key, no LLM call
-  overreach demo                                    self-contained zero-key demo
-  overreach init                                    install pre-commit hook
-  overreach --prompt "..." --json                  raw JSON for piping/CI
-
-Agent-to-agent:
-  overreach --prompt "..." --emit-contract --json > contract.json
-  overreach --prompt "child task" --parent-contract contract.json --agent-name "agent-b"
-
-Catch-up (what did I miss while away):
-  overreach status --since-agent claude            work since claude last checked in
-  overreach ledger --since 2026-06-23T14:00:00Z    entries after a timestamp
-  overreach ledger --since-agent claude --json     pipe the delta to another agent
-
-Check-in (same-PC live awareness — agents on one machine share the filesystem,
-so re-reading .overreach/ is near-real-time awareness with no server):
-  overreach check-in --agent-name claude           renew my claims + see what every
-                                                    agent is doing + what I missed
-  overreach check-in --agent-name claude --diagnose  also diagnose any open file
-                                                    collisions involving me
-  overreach check-in --agent-name claude --json      structured JSON for piping
-
-Coordination gate (CI — the one place an agent can't skip):
-  git diff | overreach coord-check                  fail on open conflicts in the diff
-  overreach coord-check --diff pr.diff --strict     also fail on unclaimed files
-  overreach coord-check --diff pr.diff --json       structured JSON for CI
+  overreach                               interactive — detects diff, asks for prompt
+  overreach -p "your prompt"              review with piped diff (git diff | overreach -p ...)
+  overreach -p "..." --diff change.diff   review a diff file
+  overreach demo                          zero-key demo: login form + Stripe smuggle
+  overreach init                          install pre-commit hook
+  overreach -p "..." --json               JSON output for CI/scripting
 
 Options:
-  -p, --prompt <text>          the instruction that authorized the work
-  -d, --diff <path>            diff file (default: read from stdin)
-  --scope <path|json>          inject authorized scope; skips the LLM entirely
-  --json                       emit raw JSON instead of pretty terminal output
-  --emit-contract              include the versioned execution contract in output
-  --parent-contract <path>     parent contract JSON (validates child narrows parent)
-  --agent-name <name>          name of the agent executing this work (for chain)
-  --no-cache                   bypass the scope cache (force a fresh Stage 1 call)
-  --since <iso8601>             only ledger entries after this timestamp
-  --since-agent <name>          only entries after that agent's most recent entry
-  demo                         run the canonical login-form-smuggles-Stripe demo
-  init                         install a git pre-commit hook + .overreach/prompt.md
+  -p, --prompt <text>       what you asked the AI to do
+  -d, --diff <path>         diff file (default: auto-detect or stdin)
+  --prompt-file <path>      read prompt from a file
+  --scope <path|json>       inject scope directly (skip LLM, zero-key)
+  --json                    raw JSON output
+  --no-cache                force fresh scope extraction
+  demo                      run the built-in demo
+  init                      install git pre-commit hook
 
-Resolution: anthropic key > openai key > ollama (local, keyless). Override with
-SCOPE_PROVIDER. Pin a model with OVERREACH_MODEL. Stage 1 scope is cached by
-hash(prompt+provider+model) so re-running the same prompt is free + instant.
+MCP server (for AI agents):
+  overreach --serve                       start MCP server (stdio)
+  PORT=8787 overreach --serve             start MCP server (HTTP)
 
-Exit code: 0 = LOW/MEDIUM, 1 = HIGH (for use as a CI gate).`;
+Team coordination (advanced):
+  overreach check-in --agent-name claude  multi-agent awareness
+  overreach coord-check --diff pr.diff    CI coordination gate
+  overreach status                        project-wide agent status
+  overreach ledger                        audit trail of all agent work
+
+AI provider: uses anthropic > openai > ollama (auto-detected from env keys).
+Override: SCOPE_PROVIDER / OVERREACH_MODEL. Scope cached per prompt.
+
+Exit code: 0 = clean, 1 = high-risk findings (CI gate).`;
 
 async function readDiff(diffPath?: string): Promise<string> {
   if (diffPath) {
@@ -190,77 +184,296 @@ function parseScopeArg(s: string): Scope {
   }
 }
 
-const SEV_COLOR: Record<string, (s: string) => string> = {
-  high: ANSI.red, medium: ANSI.yellow, low: ANSI.green,
-};
-const KIND_LABEL: Record<string, string> = {
-  "scope.file": "out-of-scope file",
-  "scope.feature": "unauthorized feature",
-  "scope.dep": "unauthorized dependency",
-  "scope.endpoint": "unauthorized endpoint",
-  "scope.env": "unauthorized env var",
-  "scope.cron": "unauthorized cron job",
-  "contract.expansion": "contract expansion",
-};
-const SCORE_COLOR: Record<string, (s: string) => string> = {
-  HIGH: ANSI.red, MEDIUM: ANSI.yellow, LOW: ANSI.green,
-};
+const SEV_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
-function pretty(result: CheckResult, meta: { source: string; cached: boolean; deterministic: boolean; promptLen: number; diffLines: number }): string {
+function pretty(result: CheckResult, meta: { source: string; cached: boolean; deterministic: boolean; promptLen: number; diffLines: number; prompt?: string }): string {
   const L: string[] = [];
-  L.push(c(ANSI.bold)("Overreach — scope audit"));
-  L.push(c(ANSI.dim)(`  ${meta.source}`));
-  if (meta.cached) L.push(c(ANSI.dim)("  stage 1: served from scope cache (no LLM call)"));
-  if (meta.deterministic) L.push(c(ANSI.cyan)("  stage 1: deterministic extraction (no API key — regex-parsed prompt, no LLM)"));
+
+  // ── Header ──────────────────────────────────────────────────────────────
+  L.push("");
+  L.push(c(ANSI.bold)("  AI PR Review"));
   L.push("");
 
-  const score = result.scope_creep_score;
-  const badge = c(SCORE_COLOR[score] || ANSI.green)(`scope_creep_score = ${score}`);
-  L.push(`  ${badge}`);
-  L.push("");
+  // ── Prompt ──────────────────────────────────────────────────────────────
+  if (meta.prompt) {
+    const display = meta.prompt.length > 80 ? meta.prompt.slice(0, 77) + "..." : meta.prompt;
+    L.push(c(ANSI.dim)(`  Prompt: "${display}"`));
+    L.push("");
+  }
 
+  // ── Skipped ─────────────────────────────────────────────────────────────
   if (result.skipped) {
-    L.push(c(ANSI.yellow)("  ⚠ Audit skipped — Stage 1 scope extraction failed (provider unreachable)."));
-    L.push(c(ANSI.dim)(`  Not blocked. ${result.summary}`));
+    L.push(c(ANSI.yellow)("  ⚠  Review skipped — scope extraction failed (provider unreachable)."));
+    L.push(c(ANSI.dim)(`     ${result.summary}`));
     L.push("");
     L.push(c(ANSI.dim)(`  ${meta.diffLines} diff lines · prompt ${meta.promptLen} chars`));
-    return L.join("\n");
-  }
-
-  if (result.findings.length === 0) {
-    L.push(c(ANSI.green)("  ✓ No overreach — the diff stayed within the prompt's scope."));
     L.push("");
-    L.push(c(ANSI.dim)(`  ${meta.diffLines} diff lines audited · prompt ${meta.promptLen} chars`));
     return L.join("\n");
   }
 
-  // group findings by kind
-  const byKind: Record<string, typeof result.findings> = {};
-  for (const f of result.findings) (byKind[f.kind] ||= []).push(f);
-  for (const [kind, fs] of Object.entries(byKind)) {
-    const label = KIND_LABEL[kind] || kind;
-    L.push(c(ANSI.bold)(`  ${label}  ${c(ANSI.dim)(`×${fs.length}`)}`));
-    for (const f of fs) {
-      const sev = c(SEV_COLOR[f.severity] || ANSI.green)(f.severity.toUpperCase().padEnd(6));
-      const where = f.file && f.file !== "source" ? c(ANSI.dim)(`  ${f.file}`) : "";
-      L.push(`    ${sev} ${f.evidence}${where}`);
-      L.push(c(ANSI.dim)(`        ${f.detail}`));
+  // ── Files summary ───────────────────────────────────────────────────────
+  const totalFiles = result.actual.files_changed.length;
+  const outOfScopeFiles = result.findings.filter(f => f.kind === "scope.file").map(f => f.evidence);
+  const inScope = totalFiles - outOfScopeFiles.length;
+
+  L.push(`  ${c(ANSI.bold)("Files Changed:")} ${totalFiles}`);
+  L.push("");
+
+  // ── Intent Alignment ────────────────────────────────────────────────────
+  L.push(c(ANSI.bold)("  Prompt Coverage"));
+  if (inScope > 0) L.push(c(ANSI.green)(`    ✓  ${inScope} file${inScope === 1 ? "" : "s"} directly related`));
+  if (outOfScopeFiles.length > 0) L.push(c(ANSI.yellow)(`    ⚠  ${outOfScopeFiles.length} file${outOfScopeFiles.length === 1 ? "" : "s"} outside requested scope`));
+  if (result.findings.length === 0) L.push(c(ANSI.green)("    ✓  All changes match your request"));
+  L.push("");
+
+  // ── Unexpected changes (grouped by risk) ────────────────────────────────
+  if (result.findings.length > 0) {
+    const high = result.findings.filter(f => f.severity === "high");
+    const medium = result.findings.filter(f => f.severity === "medium");
+    const low = result.findings.filter(f => f.severity === "low");
+
+    if (high.length > 0) {
+      L.push(c(ANSI.red)(c(ANSI.bold)("  ⚠  High Risk")));
+      for (const f of high) {
+        L.push(c(ANSI.red)(`    ⚠  ${friendlyFinding(f)}`));
+      }
+      L.push("");
     }
-    L.push("");
+    if (medium.length > 0) {
+      L.push(c(ANSI.yellow)(c(ANSI.bold)("  ⚠  Medium Risk")));
+      for (const f of medium) {
+        L.push(c(ANSI.yellow)(`    ⚠  ${friendlyFinding(f)}`));
+      }
+      L.push("");
+    }
+    if (low.length > 0) {
+      L.push(c(ANSI.dim)(c(ANSI.bold)("  ℹ  Low Risk")));
+      for (const f of low) {
+        L.push(c(ANSI.dim)(`    ℹ  ${friendlyFinding(f)}`));
+      }
+      L.push("");
+    }
+
+    // ── Review Order ────────────────────────────────────────────────────────
+    // Map findings to real file paths from actual.files_changed where possible.
+    const sorted = [...result.findings].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9));
+    const changedFiles = result.actual.files_changed;
+    const seen = new Set<string>();
+    const reviewItems: { file: string; why: string }[] = [];
+    for (const f of sorted) {
+      const realFile = resolveRealFile(f, changedFiles);
+      if (realFile && !seen.has(realFile)) {
+        seen.add(realFile);
+        reviewItems.push({ file: realFile, why: friendlyKind(f.kind) });
+      }
+    }
+    if (reviewItems.length > 0) {
+      L.push(c(ANSI.bold)("  Review Order") + c(ANSI.dim)(" (start here)"));
+      reviewItems.forEach((item, i) => {
+        L.push(`    ${i + 1}. ${item.file}${c(ANSI.dim)(` — ${item.why}`)}`);
+      });
+      L.push("");
+    }
   }
-  L.push(c(ANSI.dim)(`  ${result.findings.length} finding(s) · ${meta.diffLines} diff lines · prompt ${meta.promptLen} chars`));
-  if (result.contract) {
-    L.push(c(ANSI.dim)(`  contract ${result.contract.id} (v${result.contract.version})`));
-  }
+
+  // ── Confidence ──────────────────────────────────────────────────────────
+  L.push(c(ANSI.bold)("  Confidence"));
+  L.push(c(ANSI.green)("    ✔  Deterministic checks only"));
+  L.push(c(ANSI.green)("    ✔  No AI-generated opinions"));
+  L.push(c(ANSI.green)("    ✔  Evidence-backed findings"));
+  if (meta.deterministic) L.push(c(ANSI.cyan)("    ✔  Zero API key — fully offline"));
+  L.push("");
+
+  // ── Footer ──────────────────────────────────────────────────────────────
+  L.push(c(ANSI.dim)(`  ${result.findings.length} finding${result.findings.length === 1 ? "" : "s"} · ${totalFiles} file${totalFiles === 1 ? "" : "s"} · ${meta.diffLines} diff lines`));
+  L.push("");
+
   return L.join("\n");
+}
+
+function friendlyFinding(f: { kind: string; evidence: string; detail: string }): string {
+  switch (f.kind) {
+    case "scope.dep": return `Added dependency: ${f.evidence}`;
+    case "scope.env": return `New environment variable: ${f.evidence}`;
+    case "scope.endpoint": return `New API endpoint: ${f.evidence}`;
+    case "scope.cron": return `Scheduled job added`;
+    case "scope.listener": return `Runtime listener added: ${f.evidence}`;
+    case "scope.file": return `File outside scope: ${f.evidence}`;
+    case "scope.feature": return `Unauthorized feature: ${f.evidence}`;
+    default: return f.detail;
+  }
+}
+
+function friendlyKind(kind: string): string {
+  switch (kind) {
+    case "scope.dep": return "new dependency";
+    case "scope.env": return "new env var";
+    case "scope.endpoint": return "new endpoint";
+    case "scope.cron": return "scheduled job";
+    case "scope.listener": return "runtime listener";
+    case "scope.file": return "outside scope";
+    case "scope.feature": return "new feature";
+    default: return kind;
+  }
+}
+
+function resolveRealFile(finding: { kind: string; file: string; evidence: string }, changedFiles: string[]): string | null {
+  const f = finding.file;
+  if (!f || f === "source") return null;
+  // If the file field is already a real path in the changed files, use it
+  if (changedFiles.includes(f)) return f;
+  // For deps, find the actual package file
+  if (finding.kind === "scope.dep") {
+    const pkg = changedFiles.find(p => /package\.json|requirements|pyproject|Pipfile|go\.mod|Gemfile|Cargo\.toml/i.test(p));
+    return pkg || "package.json";
+  }
+  // For env vars, find the .env file
+  if (finding.kind === "scope.env") {
+    const env = changedFiles.find(p => /\.env/i.test(p));
+    return env || ".env";
+  }
+  // For endpoints, find the route file from evidence
+  if (finding.kind === "scope.endpoint") {
+    const route = finding.evidence.replace(/^\//, "").split("/")[1] || "";
+    const match = changedFiles.find(p => p.includes("route") || p.includes("api") || p.includes(route));
+    return match || f;
+  }
+  // For cron, find the cron/schedule file
+  if (finding.kind === "scope.cron") {
+    const match = changedFiles.find(p => /cron|schedule|job/i.test(p));
+    return match || f;
+  }
+  return f;
+}
+
+function askUser(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => { rl.close(); resolve(answer.trim()); });
+  });
+}
+
+interface DiffSource {
+  label: string;
+  cmd: string;
+  lineCount: number;
+}
+
+function detectDiffSources(): DiffSource[] {
+  const sources: DiffSource[] = [];
+  const tryDiff = (label: string, cmd: string) => {
+    try {
+      const out = execSync(cmd, { encoding: "utf-8" });
+      const lines = out.trim().split("\n").filter(l => l.startsWith("+") || l.startsWith("-")).length;
+      if (out.trim()) sources.push({ label, cmd, lineCount: lines });
+    } catch { /* ignore */ }
+  };
+
+  tryDiff("Staged changes (git add)", "git diff --staged");
+  tryDiff("Unstaged changes", "git diff");
+  tryDiff("Last commit", "git diff HEAD~1");
+
+  // Branch diff vs main/master
+  try {
+    const branches = execSync("git branch --list main master", { encoding: "utf-8" }).trim();
+    const base = branches.includes("main") ? "main" : branches.includes("master") ? "master" : null;
+    if (base) {
+      const current = execSync("git branch --show-current", { encoding: "utf-8" }).trim();
+      if (current && current !== base) {
+        tryDiff(`Branch diff (${current} vs ${base})`, `git diff ${base}...HEAD`);
+      }
+    }
+  } catch { /* not on a branch, or no main/master */ }
+
+  return sources;
+}
+
+function findPromptFile(): string | null {
+  const candidates = [".overreach/prompt.md", ".overreach/prompt.txt"];
+  for (const f of candidates) {
+    if (existsSync(f)) return readFileSync(f, "utf-8").trim();
+  }
+  return null;
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.help || process.argv.length <= 2) { console.log(HELP); process.exit(0); }
+  if (args.help) { console.log(HELP); process.exit(0); }
+
+  // ── serve (MCP server mode) ─────────────────────────────────────────────
+  if (args.serve) {
+    const { startServer } = await import("./index.js");
+    await startServer();
+    return;
+  }
 
   // ── init ─────────────────────────────────────────────────────────────────
   if (args.init) { runInit(); return; }
+
+  // ── interactive mode (no args) ──────────────────────────────────────────
+  if (process.argv.length <= 2 && process.stdin.isTTY) {
+    console.log(c(ANSI.bold)("\n  Overreach — AI PR Review\n"));
+
+    const sources = detectDiffSources();
+    if (sources.length === 0) {
+      console.log("  No changes detected. Stage some changes or make a commit first.");
+      console.log(c(ANSI.dim)("  Or try: overreach demo\n"));
+      process.exit(0);
+    }
+
+    let diff: string;
+    if (sources.length === 1) {
+      console.log(c(ANSI.dim)(`  Using: ${sources[0].label} (${sources[0].lineCount} lines)\n`));
+      diff = execSync(sources[0].cmd, { encoding: "utf-8" });
+    } else {
+      console.log("  What changes do you want to review?\n");
+      sources.forEach((s, i) => {
+        console.log(`    ${i + 1}. ${s.label} ${c(ANSI.dim)(`(${s.lineCount} lines)`)}`);
+      });
+      console.log("");
+      const choice = await askUser("  Pick a number: ");
+      const idx = parseInt(choice, 10) - 1;
+      if (isNaN(idx) || idx < 0 || idx >= sources.length) {
+        console.log("  Invalid choice.");
+        process.exit(2);
+      }
+      diff = execSync(sources[idx].cmd, { encoding: "utf-8" });
+      console.log("");
+    }
+
+    let prompt = findPromptFile();
+    if (!prompt) {
+      prompt = await askUser("  What did you ask the AI to do?\n  > ");
+      if (!prompt) {
+        console.log("\n  No prompt provided. Can't review without knowing what you asked for.");
+        process.exit(2);
+      }
+      console.log("");
+    }
+
+    const provider = resolveProvider();
+    const model = resolveModel(provider);
+    let scopeOverride: Scope | undefined;
+    let cached = false;
+    const hit = getScopeCache(prompt, provider, model);
+    if (hit) { scopeOverride = hit; cached = true; }
+
+    const options: Parameters<typeof checkOverreach>[2] = {};
+    if (scopeOverride) options.scopeOverride = scopeOverride;
+    const result = await checkOverreach(prompt, diff, options);
+
+    if (!scopeOverride && !result.skipped && !result.deterministic) {
+      putScopeCache(prompt, provider, model, result.scope);
+    }
+
+    const meta = { source: `provider=${provider} model=${model}`, cached, deterministic: !!result.deterministic, promptLen: sizeOfPrompt(prompt), diffLines: sizeOfDiff(diff), prompt };
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(pretty(result, meta));
+    }
+    process.exit(result.scope_creep_score === "HIGH" ? 1 : 0);
+  }
 
   // ── ledger ──────────────────────────────────────────────────────────────
   if (args.ledger) {
@@ -389,7 +602,7 @@ async function main() {
   // ── demo ─────────────────────────────────────────────────────────────────
   if (args.demo) {
     const result = await checkOverreach(DEMO_PROMPT, DEMO_DIFF, { scopeOverride: DEMO_SCOPE });
-    const meta = { source: "demo: canonical login-form-smuggles-Stripe fixture (scope injected, no LLM call, zero key)", cached: false, deterministic: false, promptLen: sizeOfPrompt(DEMO_PROMPT), diffLines: sizeOfDiff(DEMO_DIFF) };
+    const meta = { source: "demo", cached: false, deterministic: false, promptLen: sizeOfPrompt(DEMO_PROMPT), diffLines: sizeOfDiff(DEMO_DIFF), prompt: DEMO_PROMPT };
     if (args.json) {
       console.log(JSON.stringify({ ...result, telemetry: result.telemetry ? { reconcileRan: result.telemetry.reconcileRan, reconcileChanged: result.telemetry.reconcileChanged } : undefined }, null, 2));
     } else {
@@ -450,7 +663,7 @@ async function main() {
     putScopeCache(prompt, provider, model, result.scope);
   }
 
-  const meta = { source, cached, deterministic: !!result.deterministic, promptLen: sizeOfPrompt(prompt), diffLines: sizeOfDiff(diff) };
+  const meta = { source, cached, deterministic: !!result.deterministic, promptLen: sizeOfPrompt(prompt), diffLines: sizeOfDiff(diff), prompt };
 
   if (args.json) {
     // JSON mode: emit the full result + a telemetry-safe event alongside it.

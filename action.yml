@@ -1,7 +1,7 @@
 # Overreach — GitHub Action (composite). Marketplace-ready.
 #
 # One-click onboarding: drops the overreach.yml workflow into the consumer's
-# repo and runs `overreach-cli init` to write .overreach/ (prompt.md, config,
+# repo and runs `overreach init` to write .overreach/ (prompt.md, config,
 # ledger), install the pre-commit hook, and append scope-audit instructions to
 # CLAUDE.md, .cursorrules, and codex.md. After this runs once, every PR is
 # audited with zero config and zero API key.
@@ -47,10 +47,10 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Run overreach-cli init
+    - name: Run overreach init
       shell: bash
       run: |
-        npx -y -p overreach@latest overreach-cli init
+        npx -y overreach@latest init
 
     - name: Drop the overreach.yml workflow
       shell: bash
@@ -130,7 +130,7 @@ runs:
                   OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
                 run: |
                   set +e
-                  npx -y -p overreach@latest overreach-cli \
+                  npx -y overreach@latest \
                     --prompt "$(cat "$RUNNER_TEMP/prompt.txt")" --diff "$RUNNER_TEMP/pr.diff" \
                     > "$RUNNER_TEMP/cli.out" 2> "$RUNNER_TEMP/run.log"
                   [ -s "$RUNNER_TEMP/run.log" ] && cat "$RUNNER_TEMP/run.log" || true
@@ -186,7 +186,7 @@ runs:
                   # touches a file with an open conflict, or in strict mode an
                   # unclaimed file. Off unless the repo set require-claims.
                   set +e
-                  npx -y -p overreach@latest overreach-cli coord-check \
+                  npx -y overreach@latest coord-check \
                     --diff "$RUNNER_TEMP/pr.diff" $strict_flag \
                     > "$RUNNER_TEMP/coord.out" 2> "$RUNNER_TEMP/coord.log"
                   rc=$?

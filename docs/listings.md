@@ -16,8 +16,8 @@ collects the copy so it's consistent everywhere.
 | Transport | stdio (default) + Streamable HTTP (`PORT=8787`) |
 | Auth | none (the user's own LLM key is configured in their env, not by the server) |
 | Tools | `check_overreach(prompt, diff, options?)`, `health()` |
-| Install (MCP) | `npx overreach` |
-| Install (CLI) | `npx -y -p overreach overreach-cli --prompt "..." --diff ...` |
+| Install (MCP) | `npx overreach --serve` |
+| Install (CLI) | `npx -y overreach --prompt "..." --diff ...` |
 | Tags | mcp, scope-creep, ai-coding, code-review, claude, cursor, agent, diff |
 
 ## Longer description (for directory body)

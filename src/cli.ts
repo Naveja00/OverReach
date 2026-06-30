@@ -23,6 +23,7 @@ import { sizeOfPrompt, sizeOfDiff, toTelemetryEvent } from "./sanitize.js";
 import type { Scope, CheckResult } from "./types.js";
 import { DEMO_PROMPT, DEMO_DIFF, DEMO_SCOPE } from "./demo.js";
 import { runInit } from "./init.js";
+import { analyzeBlastRadius } from "./blast_radius.js";
 
 const ANSI = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
@@ -186,106 +187,95 @@ function parseScopeArg(s: string): Scope {
 
 const SEV_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
-function pretty(result: CheckResult, meta: { source: string; cached: boolean; deterministic: boolean; promptLen: number; diffLines: number; prompt?: string }): string {
+function pretty(result: CheckResult, meta: { source: string; cached: boolean; deterministic: boolean; promptLen: number; diffLines: number; prompt?: string; diff?: string }): string {
   const L: string[] = [];
+  const bar = c(ANSI.dim)("  ─────────────────────────────────────────────────");
 
-  // ── Header ──────────────────────────────────────────────────────────────
   L.push("");
-  L.push(c(ANSI.bold)("  AI PR Review"));
-  L.push("");
+  L.push(c(ANSI.bold)("  Overreach — AI PR Review"));
+  L.push(bar);
 
-  // ── Prompt ──────────────────────────────────────────────────────────────
   if (meta.prompt) {
     const display = meta.prompt.length > 80 ? meta.prompt.slice(0, 77) + "..." : meta.prompt;
-    L.push(c(ANSI.dim)(`  Prompt: "${display}"`));
-    L.push("");
+    L.push(c(ANSI.dim)(`  You asked: "${display}"`));
   }
 
-  // ── Skipped ─────────────────────────────────────────────────────────────
   if (result.skipped) {
-    L.push(c(ANSI.yellow)("  ⚠  Review skipped — scope extraction failed (provider unreachable)."));
-    L.push(c(ANSI.dim)(`     ${result.summary}`));
     L.push("");
-    L.push(c(ANSI.dim)(`  ${meta.diffLines} diff lines · prompt ${meta.promptLen} chars`));
+    L.push(c(ANSI.yellow)("  ⚠  Skipped — scope extraction failed (provider unreachable)"));
+    L.push(c(ANSI.dim)(`  ${meta.diffLines} diff lines · ${meta.promptLen} char prompt`));
     L.push("");
     return L.join("\n");
   }
 
-  // ── Files summary ───────────────────────────────────────────────────────
   const totalFiles = result.actual.files_changed.length;
   const outOfScopeFiles = result.findings.filter(f => f.kind === "scope.file").map(f => f.evidence);
   const inScope = totalFiles - outOfScopeFiles.length;
 
-  L.push(`  ${c(ANSI.bold)("Files Changed:")} ${totalFiles}`);
+  L.push(`  ${totalFiles} files changed · ${inScope} in scope` +
+    (outOfScopeFiles.length > 0 ? ` · ${c(ANSI.yellow)(`${outOfScopeFiles.length} outside scope`)}` : ""));
   L.push("");
 
-  // ── Intent Alignment ────────────────────────────────────────────────────
-  L.push(c(ANSI.bold)("  Prompt Coverage"));
-  if (inScope > 0) L.push(c(ANSI.green)(`    ✓  ${inScope} file${inScope === 1 ? "" : "s"} directly related`));
-  if (outOfScopeFiles.length > 0) L.push(c(ANSI.yellow)(`    ⚠  ${outOfScopeFiles.length} file${outOfScopeFiles.length === 1 ? "" : "s"} outside requested scope`));
-  if (result.findings.length === 0) L.push(c(ANSI.green)("    ✓  All changes match your request"));
-  L.push("");
-
-  // ── Unexpected changes (grouped by risk) ────────────────────────────────
-  if (result.findings.length > 0) {
+  if (result.findings.length === 0) {
+    L.push(c(ANSI.green)("  ✓  Clean — all changes match your request"));
+    L.push("");
+  } else {
     const high = result.findings.filter(f => f.severity === "high");
     const medium = result.findings.filter(f => f.severity === "medium");
     const low = result.findings.filter(f => f.severity === "low");
 
-    if (high.length > 0) {
-      L.push(c(ANSI.red)(c(ANSI.bold)("  ⚠  High Risk")));
-      for (const f of high) {
-        L.push(c(ANSI.red)(`    ⚠  ${friendlyFinding(f)}`));
-      }
-      L.push("");
-    }
-    if (medium.length > 0) {
-      L.push(c(ANSI.yellow)(c(ANSI.bold)("  ⚠  Medium Risk")));
-      for (const f of medium) {
-        L.push(c(ANSI.yellow)(`    ⚠  ${friendlyFinding(f)}`));
-      }
-      L.push("");
-    }
-    if (low.length > 0) {
-      L.push(c(ANSI.dim)(c(ANSI.bold)("  ℹ  Low Risk")));
-      for (const f of low) {
-        L.push(c(ANSI.dim)(`    ℹ  ${friendlyFinding(f)}`));
-      }
-      L.push("");
-    }
+    L.push(c(ANSI.bold)("  Findings"));
+    L.push("");
 
-    // ── Review Order ────────────────────────────────────────────────────────
-    // Map findings to real file paths from actual.files_changed where possible.
-    const sorted = [...result.findings].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9));
-    const changedFiles = result.actual.files_changed;
-    const seen = new Set<string>();
-    const reviewItems: { file: string; why: string }[] = [];
-    for (const f of sorted) {
-      const realFile = resolveRealFile(f, changedFiles);
-      if (realFile && !seen.has(realFile)) {
-        seen.add(realFile);
-        reviewItems.push({ file: realFile, why: friendlyKind(f.kind) });
-      }
+    for (const f of high) {
+      const realFile = resolveRealFile(f, result.actual.files_changed);
+      L.push(c(ANSI.red)(`  ✗ ${friendlyFinding(f)}`));
+      if (realFile) L.push(c(ANSI.dim)(`    ${realFile}`));
     }
-    if (reviewItems.length > 0) {
-      L.push(c(ANSI.bold)("  Review Order") + c(ANSI.dim)(" (start here)"));
-      reviewItems.forEach((item, i) => {
-        L.push(`    ${i + 1}. ${item.file}${c(ANSI.dim)(` — ${item.why}`)}`);
-      });
+    for (const f of medium) {
+      const realFile = resolveRealFile(f, result.actual.files_changed);
+      L.push(c(ANSI.yellow)(`  ⚠ ${friendlyFinding(f)}`));
+      if (realFile) L.push(c(ANSI.dim)(`    ${realFile}`));
+    }
+    if (low.length <= 5) {
+      for (const f of low) {
+        L.push(c(ANSI.dim)(`  · ${friendlyFinding(f)}`));
+      }
+    } else {
+      for (const f of low.slice(0, 3)) {
+        L.push(c(ANSI.dim)(`  · ${friendlyFinding(f)}`));
+      }
+      L.push(c(ANSI.dim)(`  · … and ${low.length - 3} more minor findings`));
+    }
+    L.push("");
+  }
+
+  // ── Blast Radius ────────────────────────────────────────────────────────
+  if (meta.diff && totalFiles >= 2) {
+    const blast = analyzeBlastRadius(meta.diff);
+    if (blast.warnings.length > 0) {
+      L.push(c(ANSI.bold)("  Heads Up"));
+      L.push("");
+      for (const w of blast.warnings) {
+        L.push(c(ANSI.cyan)(`  → ${w.message}`));
+        L.push(c(ANSI.dim)(`    ${w.suggestion}`));
+        if (w.files.length <= 3) {
+          L.push(c(ANSI.dim)(`    ${w.files.join(", ")}`));
+        } else {
+          L.push(c(ANSI.dim)(`    ${w.files.slice(0, 2).join(", ")} + ${w.files.length - 2} more`));
+        }
+      }
       L.push("");
     }
   }
 
-  // ── Confidence ──────────────────────────────────────────────────────────
-  L.push(c(ANSI.bold)("  Confidence"));
-  L.push(c(ANSI.green)("    ✔  Deterministic checks only"));
-  L.push(c(ANSI.green)("    ✔  No AI-generated opinions"));
-  L.push(c(ANSI.green)("    ✔  Evidence-backed findings"));
-  if (meta.deterministic) L.push(c(ANSI.cyan)("    ✔  Zero API key — fully offline"));
-  L.push("");
-
   // ── Footer ──────────────────────────────────────────────────────────────
-  L.push(c(ANSI.dim)(`  ${result.findings.length} finding${result.findings.length === 1 ? "" : "s"} · ${totalFiles} file${totalFiles === 1 ? "" : "s"} · ${meta.diffLines} diff lines`));
+  L.push(bar);
+  const scoreColor = result.scope_creep_score === "HIGH" ? ANSI.red : result.scope_creep_score === "MEDIUM" ? ANSI.yellow : ANSI.green;
+  const badgeLabel = result.scope_creep_score === "HIGH" ? "review carefully" : result.scope_creep_score === "MEDIUM" ? "worth checking" : "looks clean";
+  const badge = c(scoreColor)(badgeLabel);
+  const mode = meta.deterministic ? c(ANSI.cyan)("offline") : c(ANSI.dim)("deterministic");
+  L.push(`  ${result.findings.length} finding${result.findings.length === 1 ? "" : "s"} · ${badge} · ${mode}`);
   L.push("");
 
   return L.join("\n");
@@ -466,9 +456,10 @@ async function main() {
       putScopeCache(prompt, provider, model, result.scope);
     }
 
-    const meta = { source: `provider=${provider} model=${model}`, cached, deterministic: !!result.deterministic, promptLen: sizeOfPrompt(prompt), diffLines: sizeOfDiff(diff), prompt };
+    const meta = { source: `provider=${provider} model=${model}`, cached, deterministic: !!result.deterministic, promptLen: sizeOfPrompt(prompt), diffLines: sizeOfDiff(diff), prompt, diff };
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2));
+      const blast = analyzeBlastRadius(diff);
+      console.log(JSON.stringify({ ...result, blast_radius: blast.warnings.length > 0 ? blast : undefined }, null, 2));
     } else {
       console.log(pretty(result, meta));
     }
@@ -602,9 +593,10 @@ async function main() {
   // ── demo ─────────────────────────────────────────────────────────────────
   if (args.demo) {
     const result = await checkOverreach(DEMO_PROMPT, DEMO_DIFF, { scopeOverride: DEMO_SCOPE });
-    const meta = { source: "demo", cached: false, deterministic: false, promptLen: sizeOfPrompt(DEMO_PROMPT), diffLines: sizeOfDiff(DEMO_DIFF), prompt: DEMO_PROMPT };
+    const meta = { source: "demo", cached: false, deterministic: false, promptLen: sizeOfPrompt(DEMO_PROMPT), diffLines: sizeOfDiff(DEMO_DIFF), prompt: DEMO_PROMPT, diff: DEMO_DIFF };
     if (args.json) {
-      console.log(JSON.stringify({ ...result, telemetry: result.telemetry ? { reconcileRan: result.telemetry.reconcileRan, reconcileChanged: result.telemetry.reconcileChanged } : undefined }, null, 2));
+      const blast = analyzeBlastRadius(DEMO_DIFF);
+      console.log(JSON.stringify({ ...result, blast_radius: blast.warnings.length > 0 ? blast : undefined, telemetry: result.telemetry ? { reconcileRan: result.telemetry.reconcileRan, reconcileChanged: result.telemetry.reconcileChanged } : undefined }, null, 2));
     } else {
       console.log(pretty(result, meta));
     }
@@ -663,11 +655,13 @@ async function main() {
     putScopeCache(prompt, provider, model, result.scope);
   }
 
-  const meta = { source, cached, deterministic: !!result.deterministic, promptLen: sizeOfPrompt(prompt), diffLines: sizeOfDiff(diff), prompt };
+  const meta = { source, cached, deterministic: !!result.deterministic, promptLen: sizeOfPrompt(prompt), diffLines: sizeOfDiff(diff), prompt, diff };
 
   if (args.json) {
     // JSON mode: emit the full result + a telemetry-safe event alongside it.
     const out: Record<string, unknown> = { ...result };
+    const blast = analyzeBlastRadius(diff);
+    if (blast.warnings.length > 0) out.blast_radius = blast;
     if (!scopeOverride && !args.noCache) {
       out.telemetry_event = toTelemetryEvent(result, { model, provider, prompt_length: meta.promptLen, diff_lines: meta.diffLines, chunked: !!result.telemetry?.reconcileRan, chunk_count: 0 });
     }

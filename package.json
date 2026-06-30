@@ -1,6 +1,6 @@
 {
   "name": "overreach",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "AI PR review assistant. Checks what your AI agent actually changed vs what you asked for. Deterministic, evidence-backed, no AI opinions.",
   "type": "module",
   "license": "MIT",

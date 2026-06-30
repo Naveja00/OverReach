@@ -1,319 +1,340 @@
-# Overreach — Build Spec (read this first, then build)
+# Overreach — Project Guide
 
-> This file is the single source of truth for what to build. It is written for an
-> AI coding agent (Claude Code / Cursor). Read it fully before writing any code.
-> Do not invent features not described here. If something is ambiguous, build the
-> smallest interpretation that satisfies the acceptance criteria at the bottom.
+> This file is the source of truth for the Overreach codebase. Read it before
+> making changes. It describes what the tool does, how it's built, what the
+> rules are, and where everything lives.
 
-## Working name
-**Overreach** (changeable). The noun names the failure mode: an AI coding agent
-*overreaches* — it ships code beyond what the prompt authorized. This tool catches that.
+## What Overreach is
 
-## TRUST CONTRACT INVARIANT (the product's reason to exist)
+An **AI PR review assistant** that audits a code diff against the prompt that
+authorized it. You told your AI agent to "add a login form." It also added
+Stripe, a secret key, and a checkout endpoint. Overreach catches that.
+
+**npm package:** `overreach`
+**GitHub:** `Naveja00/OverReach`
+**Version:** 0.7.0
+
+### What we moved away from
+
+Overreach started as an **MCP-first scope audit + multi-agent coordination tool**.
+The original vision was:
+- `npx overreach` started an MCP server (not a CLI)
+- AI agents called `check_overreach()` to self-audit (fox guarding the henhouse)
+- A full coordination layer: file claims, collision detection, agent check-ins,
+  coordination ledger, conflict resolution, scope DSL, handoff validation, CI
+  coordination gate — 17 MCP tools total for multi-agent workflows
+- Marketed as "scope audit" with architecture-heavy docs
+
+**Why we moved away:** 1,626 npm downloads but 0 external usage (zero telemetry
+pings). People installed it but never used it. Root cause: too much friction.
+You had to configure MCP, understand the tool system, set up scaffold files,
+and learn flags before getting any value. The coordination layer was ~29% of
+the codebase (~1,562 lines) and nobody used it — it solved a theoretical problem
+(multiple AI agents on the same repo) that almost nobody has yet.
+
+### What we focus on now
+
+**v0.7.0 repositioned Overreach as an AI PR review assistant for humans.**
+
+The focus is:
+- **`npx overreach` runs the CLI directly** — not an MCP server
+- **Interactive mode with zero setup** — auto-detects diff, asks one question,
+  shows the review. No config files, no flags, no scaffolding
+- **Human-readable output** — findings grouped by severity, blast radius
+  warnings for practical dev concerns, clean terminal formatting
+- **The MCP server still exists** (`--serve` flag) but it's secondary
+- **The coordination layer code still exists** in the codebase but is demoted
+  — it's not in the README, not in the help text, not the selling point
+- **Blast radius** — a new layer of practical cross-file warnings (missing
+  migrations, env var mismatches, no tests, hardcoded secrets, etc.) that
+  developers actually care about. Separate from findings, not mixed in.
+
+The adoption insight: the tool needs to deliver value in **one command with
+zero setup**. The user runs `npx overreach`, types what they asked the AI to
+do, and gets a review. That's it.
+
+### How people use it
+
+```bash
+# Interactive — the main way
+cd your-project
+npx overreach
+# → auto-detects diff sources, asks "What did you ask the AI to do?", shows review
+
+# Piped
+git diff | overreach --prompt "add user authentication"
+
+# Demo (zero-key, self-contained)
+npx overreach demo
+
+# MCP server (for AI agents to self-audit)
+overreach --serve
+```
+
+### Bin mapping
+
+| Command | Entry point | Purpose |
+|---|---|---|
+| `overreach` | `dist/src/cli.js` | CLI review tool (default) |
+| `overreach-server` | `dist/src/index.js` | MCP server |
+| `overreach-cli` | `dist/src/cli.js` | Backward compat alias |
+
+---
+
+## TRUST CONTRACT INVARIANT (do not weaken this)
+
 Overreach's trust contract is: **every finding is derivable from (prompt, diff)
 by deterministic set arithmetic.** No finding depends on inference, opinion, or
-"what done looks like." This is the property that separates Overreach from every
-probabilistic AI reviewer, and it must not be weakened by a feature addition.
+"what done looks like."
 
 Enforcement rules:
 - A finding's `kind` MUST be in the deterministic `scope.*` set, produced by
-  Stage 3 (`actual − authorized`). Anything that would require inferring intent,
-  completeness, or success does NOT go in `scope.*` — it belongs in a separate,
-  differently-named product with a probabilistic/advisory trust contract, never
-  mixed into this tool's findings list.
+  Stage 3 (`actual − authorized`).
 - Findings of different trust levels (fact vs opinion) must NEVER share one
-  output list — mixing them collapses the whole list to the lowest trust level
-  present and destroys the value of the deterministic engine.
+  output list.
 - The deterministic `FindingKind` set is frozen (see `src/types.ts`). The test
-  suite asserts it equals exactly the scope.* gate kinds; adding a
-  non-deterministic kind fails the test unless the invariant is deliberately
-  amended here with a stated justification.
+  suite asserts it equals exactly the scope.* gate kinds.
+
+### The frozen finding kinds (7 total)
+
+| Kind | Severity | What it means |
+|---|---|---|
+| `scope.env` | HIGH | Env var in diff not mentioned in prompt |
+| `scope.endpoint` | HIGH | API route added without authorization |
+| `scope.cron` | HIGH | Scheduled job or cron task added |
+| `scope.listener` | HIGH | Runtime listener (server, WebSocket, `process.on`) |
+| `scope.dep` | MEDIUM | Package dependency added |
+| `scope.file` | MEDIUM | File changed outside prompt's implied scope |
+| `scope.feature` | LOW | New function/class/symbol not matching any authorized feature |
 
 ### Amendments to the frozen set
-- **`scope.listener` (added 2026-06-23, 7th kind).** A runtime listener — a
-  server opening a port (`.listen(8080)`), a `WebSocket`/`http`/`net` server
-  constructor, or a *global-object* event handler (`process.on`,
-  `window`/`document`/`self.addEventListener`) — is the same HIGH-severity
-  runtime-surface class as `scope.endpoint`/`scope.env`/`scope.cron`, and was a
-  silent blind spot before this amendment. It is purely deterministic: the
-  listen / `process.on` / `addEventListener` call is literally in the diff, so
-  the finding is derivable from (prompt, diff) by set arithmetic with no
-  inference. Generic element `.addEventListener` (UI event handlers) is
-  intentionally NOT flagged — that is feature-scope, not a runtime surface.
-  Listeners authorize via `features_allowed` + `behavioral_changes_allowed`
-  (keyword "listen"/"server"/"websocket"/"crash handler" or fuzzy evidence
-  match), the same pattern `scope.cron` uses (no dedicated scope field).
 
-## One-line product
-An MCP server exposing ONE tool, `check_overreach(prompt, diff)`, that audits a code
-diff against the originating natural-language prompt and flags every out-of-scope
-change the agent made.
-
-## The exact problem (do not solve a different problem)
-Solo developers using Claude Code / Cursor / Aider ask an agent to do a small thing
-("add a login form to the settings page"). The agent also adds a Stripe import, a
-`STRIPE_SECRET` env var, a `/api/checkout` endpoint, and a cron job — none of which
-were requested. This is invisible until production breaks or a bill arrives.
-
-> Source pain quote (real signal): "turns out my ai assistant had been extremely
-> making product decisions without me."
-
-The job-to-be-done: **tell the developer, at commit time, exactly which parts of the
-diff were NOT entailed by the prompt.** Not code quality. Not security. Not spec
-conformance. Scope compliance against the literal prompt. (Crucial: stay in this lane.)
-
-## What this is NOT (explicitly out of scope for V1)
-- NOT a linter / formatter / code-quality reviewer (CodeRabbit etc. exist).
-- NOT spec-driven-development (Kiro / spec-kit check code vs a formal spec doc — different).
-- NOT prompt-injection detection.
-- NOT security scanning.
-- NOT multi-repo / team dashboards.
-- NOT AST-perfect analysis — V1 uses regex + light parsing. Good enough beats perfect.
+- **`scope.listener` (added 2026-06-23, 7th kind).** Runtime listeners
+  (`.listen()`, `process.on`, `WebSocket` constructors, global `addEventListener`)
+  are the same HIGH-severity runtime-surface class as endpoints/env/cron. Generic
+  element `.addEventListener` (UI event handlers) is intentionally NOT flagged.
 
 ---
 
-## THE ONE TOOL — `check_overreach`
+## The 3-stage pipeline
 
-### Signature
-```
-check_overreach(prompt: string, diff: string, options?: { language?: string }) -> JSON
-```
-- `prompt`: the natural-language instruction the agent was given (the authorized scope).
-- `diff`: a unified git diff (`git diff` output) of the changes to audit.
-- `options.language`: optional hint ("python" | "typescript" | "auto"). Default "auto"
-  (detect from diff file extensions).
+### Stage 1 — Extract scope (the ONLY LLM step)
 
-### Returns (exact JSON schema)
-```json
-{
-  "scope": {
-    "files_allowed": ["string"],
-    "features_allowed": ["string"],
-    "endpoints_allowed": ["string"],
-    "deps_allowed": ["string"],
-    "env_allowed": ["string"],
-    "behavioral_changes_allowed": ["string"]
-  },
-  "actual": {
-    "files_changed": ["string"],
-    "symbols_added": ["string"],
-    "imports_added": ["string"],
-    "env_vars_added": ["string"],
-    "endpoints_added": ["string"],
-    "cron_added": ["string"],
-    "new_deps": ["string"]
-  },
-  "findings": [
-    {
-      "kind": "scope.file | scope.feature | scope.dep | scope.endpoint | "
-             "scope.env | scope.cron | scope.listener",
-      "detail": "human-readable, cites the specific diff line/symbol",
-      "file": "path:line",
-      "severity": "high | medium | low",
-      "evidence": "short quote from the diff"
-    }
-  ],
-  "scope_creep_score": "LOW | MEDIUM | HIGH",
-  "summary": "one sentence, e.g. 'Diff adds 4 unauthorized things: stripe dep, STRIPE_SECRET env, /api/checkout, cleanup cron.'"
-}
+One cheap/fast model call. Input: the user's prompt. Output: JSON `scope` block
+with `files_allowed`, `features_allowed`, `endpoints_allowed`, `deps_allowed`,
+`env_allowed`, `behavioral_changes_allowed`.
+
+- Model: cheapest available (haiku / gpt-4o-mini / ollama)
+- Temperature 0, retry 2× on parse failure
+- Cached by `hash(prompt + provider + model)` — re-runs are free
+- **Zero-key fallback:** regex-parses the prompt for concrete items. No LLM needed.
+
+Provider resolution chain: `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → Ollama.
+Can be overridden with `SCOPE_PROVIDER` and `OVERREACH_MODEL` env vars.
+
+**Typo tolerance:** Stage 1 prompt tells the model to decipher misspellings
+(`"setings page"` → `"settings page"`). Stage 3 also has deterministic
+Damerau-Levenshtein fuzzy matching with a common-word guard so `auth` ≠ `auto`.
+
+### Stage 2 — Parse the diff (deterministic, no LLM)
+
+Regex-based extraction in `src/parsers/diff.ts`. Detects:
+- Files changed, imports added, env vars added, endpoints added
+- Cron/scheduled jobs, new deps (package.json/requirements.txt/go.mod/Cargo.toml/Gemfile)
+- Symbols added (functions, classes, consts)
+- Runtime listeners, IaC resources (terraform/k8s/CloudFormation), SQL DDL
+
+Must run in <100ms for a 2000-line diff.
+
+### Stage 3 — Compare (pure set arithmetic)
+
+`actual − authorized = findings`. For each actual category, subtract anything
+in the matching scope category (fuzzy match: case-insensitive substring,
+path-prefix for files, Damerau-Levenshtein for typo tolerance).
+
+`scope_creep_score`: HIGH if any high-severity finding; MEDIUM if only medium;
+LOW if only low or none.
+
+---
+
+## Blast radius (Heads Up section)
+
+A **separate** layer from findings. Pattern-matched from the diff, also fully
+deterministic. These are practical cross-file warnings — not scope creep, just
+things developers forget:
+
+| # | Pattern | What it catches |
+|---|---|---|
+| 1 | `schema-no-migration` | Schema changed, no migration file |
+| 2 | `env-not-in-dotenv` | Code uses `process.env.FOO` but `.env` doesn't define it |
+| 3 | `env-defined-not-used` | `.env` defines a var but no changed source reads it |
+| 4 | `route-no-test` | New API route, no test file updated |
+| 5 | `many-changes-no-tests` | 3+ source files changed, zero tests |
+| 6 | `exports-no-types` | New exports added but type definitions not updated |
+| 7 | `infra-only` | Docker/CI changed, no source code |
+| 8 | `config-sprawl` | 3+ config files changed at once |
+| 9 | `schema-migration-pair` | Schema + migration both changed — review together |
+| 10 | `deps-no-lockfile` | package.json deps changed, no lockfile updated |
+| 11 | `styles-no-component` | CSS changed but no component file updated |
+| 12 | `auth-middleware-changed` | Auth/middleware touched — security-sensitive |
+| 13 | `large-file` | Single file with 200+ lines added |
+| 14 | `hardcoded-secret` | API key / password / token in source code |
+| 15 | `tech-debt-added` | TODO/FIXME/HACK in 2+ files |
+| 16 | `new-file-not-imported` | New source file created but never imported |
+| 17 | `api-no-docs` | API routes changed, no docs updated |
+
+Blast radius warnings do NOT affect the findings list or the risk score. They
+appear in a separate "Heads Up" section in CLI output and a separate
+`blast_radius` key in JSON output. Capped at 8 warnings max.
+
+Source: `src/blast_radius.ts`
+
+---
+
+## CLI output format
+
+The pretty-printed output follows this layout:
+
+```
+  Overreach — AI PR Review
+  ─────────────────────────────────────────────────
+  You asked: "the user's prompt, truncated to 80 chars"
+  N files changed · M in scope · K outside scope
+
+  Findings
+
+  ✗ [high severity findings — red]
+  ⚠ [medium severity findings — yellow]
+  · [low severity findings — dim, collapsed if >5: shows 3 + "… and N more"]
+
+  Heads Up                           ← blast radius, only if warnings exist
+
+  → [warning message — cyan]
+    [suggestion — dim]
+    [affected files — dim]
+
+  ─────────────────────────────────────────────────
+  N findings · RISK level · offline/deterministic
 ```
 
 ---
 
-## THE 3-STAGE PIPELINE (the whole product)
+## File structure
 
-### Stage 1 — EXTRACT SCOPE (the ONLY LLM step; keep it cheap)
-One small/fast model call. Input: `prompt`. Output: strict JSON `scope` block above.
-
-System prompt (use verbatim, force JSON):
-```
-You extract the AUTHORIZED SCOPE from a coding instruction. Output ONLY JSON, no prose.
-Parse the user's instruction into exactly these keys:
-  files_allowed       — file/dir paths the user said to touch (empty if none named)
-  features_allowed    — features/behaviors explicitly requested
-  endpoints_allowed   — API routes/endpoints explicitly requested
-  deps_allowed        — npm/pip packages explicitly requested
-  env_allowed         — environment variables explicitly requested
-  behavioral_changes_allowed — side effects explicitly requested
-If something is not mentioned, return an empty array for that key. Do NOT infer or
-expand scope. Only what the user literally asked for. Output: {scope: {...}}
-CRUCIAL: DO decipher misspellings/typos to the nearest real concept the user clearly
-meant (e.g. "setings page" -> "settings page", "logn form" -> "login form") — you are
-reading natural language the same way you answer a normal question. But correcting a
-typo is NOT the same as expanding scope: never add a feature/dep/endpoint/env the user
-did not name. Correct spelling of what they said; never invent what they didn't say.
-```
-- Model: cheap/fast (e.g. claude-haiku-4-5 or gpt-4o-mini equivalent). Temperature 0.
-- Retry up to 2× on JSON parse failure; if still failing, return findings=[] with
-  summary="could not parse scope".
-
-### Stage 2 — EXTRACT ACTUAL (deterministic, NO LLM, fast, free)
-Parse the unified diff with regex + light parsing. Detect, per language:
-
-**Files changed:** parse `+++ b/<path>` / `--- a/<path>` headers and `@@` hunks.
-
-**Imports added** (added lines starting with `+`):
-- Python: `^\\+\\s*(import|from)\\s+([\\w\\.]+)` → capture module
-- TS/JS: `^\\+\\s*import\\b` and `^\\+\\s*(?:const|let|var)\\s+\\w+\\s*=\\s*require\\(` ; capture from '...'
-
-**Env vars added:**
-- Python: `os\\.environ\\[["']([\\w]+)["']\\]`, `os\\.getenv\\(["']([\\w]+)`
-- dotenv: `^\\+\\s*([A-Z_][A-Z0-9_]*)\\s*=` inside `.env` files
-- TS/JS: `process\\.env\\.([A-Z_][A-Z0-9_]*)`, `process\\.env\\[["']([\\w]+)["']\\]`
-
-**Endpoints added:**
-- Python (FastAPI/Flask): `@(app|router)\\.(get|post|put|delete|patch)\\(["']([^"']+)` → path
-- TS/JS (Express/Next/Hono): `\\.(get|post|put|delete|patch)\\(["'\`]([^"'\`]+)` ;
-  Next.js app router: any `+page`/`+server` or `route.ts` file change under `app/` = an endpoint
-- Also count new top-level `export async function GET/POST/...` in route files.
-
-**Cron/scheduled jobs added:**
-- Python: `cron\\.\\w+\\(`, `@scheduler\\.`, `schedule\\.every`, `BackgroundScheduler`
-- TS/JS: `cron\\.schedule\\(`, `new CronJob`, `@nestjs/schedule` `@Cron`, Vercel `cron` in config
-
-**New deps:** parse `+` lines in `package.json` / `composer.json` ("dependencies"/"devDependencies"
-blocks), `requirements.txt` / `pyproject.toml` / `Pipfile` (`+` lines like `name==`/`name>=`),
-`go.mod` (`require` lines), `Gemfile`/`.gemspec` (`gem "name"`), and `Cargo.toml`
-(`name = "ver"` / `name = { ... }`, with a skip-set for `[package]`/`[profile]`/`[workspace]`
-keys like `edition`/`version` so config fields are not mistaken for deps).
-
-**Symbols added:** `^\\+\\s*(def |class |function |const |export function |export const )`
-and `export default class/function` → capture names. Also folded into `symbols_added`
-(so they flow through `scope.feature`, the existing kind — no new kind): infrastructure-as-code
-resources — terraform `resource "aws_s3_bucket" "x"`, kubernetes `kind:` (allowlisted kinds,
-yaml-only), CloudFormation `Type: AWS::X::Y` — and SQL DDL `CREATE/ALTER TABLE foo`. A smuggled
-S3 bucket / k8s Deployment / table the prompt never named is the same class of unauthorized
-scope as a smuggled code symbol. Used to populate `symbols_added` and to detect behavioral changes.
-
-Return the `actual` block. No LLM. Must run in <100ms for a 2000-line diff.
-
-### Stage 3 — DIFF (pure set arithmetic, instant)
-For each actual category, subtract anything that appears in the matching scope category
-(fuzzy match: case-insensitive substring / path-prefix for files, exact for deps/env).
-Everything left = a finding. Assign severity:
-
-> **Typo-tolerant authorization (deterministic).** The `authorized` relation is
-> widened so a misspelled scope token still matches the real identifier: equal,
-> substring, or within a 1–2 char Damerau-Levenshtein edit (OSA), gated by a
-> common-word guard so real words never collide (`auth` ≠ `auto`, `form` ≠ `from`).
-> This is NOT inference — edit distance is a pure function of the two strings, so
-> the finding is still derivable from (prompt, diff) by deterministic set
-> arithmetic. The point: a Stage-1 model that leaves `"setings"`/`"logn"` uncorrected
-> must not cause a false *positive* (flagging in-scope work as creep). The engine
-> matches the typo to the real identifier regardless. Proven in the [T24] taxonomy
-> group (zero cloud).
-- `scope.env` / `scope.endpoint` / `scope.cron` / `scope.listener` → high
-- `scope.dep` → medium
-- `scope.file` → medium (high if outside any dir implied by scope)
-- `scope.feature` (symbols not matching any allowed feature keyword) → low/medium
-
-`scope_creep_score`: HIGH if any high-severity finding; MEDIUM if only medium; LOW if only
-low or none.
-
----
-
-## WHERE THE PROMPT COMES FROM (ship options 1 + 2 first)
-1. **Explicit arg** — the agent passes its own task string to `check_overreach`. Cleanest.
-2. **`AGENTS.md` or `.overreach/prompt.md`** in the repo — tool reads it if `prompt` arg empty.
-3. (Later) the agent's own plan/TODO if present — premium "audit against the plan" mode.
-4. (Later) latest git commit message.
-
-If no prompt can be obtained, return `findings=[]`, `summary="no prompt source found"`.
-
----
-
-## MCP SERVER SPEC
-- Transport: **Streamable HTTP** (so it works with Claude Desktop, Cursor, remote clients).
-- Expose the single tool `check_overreach` with the JSON schema above as its input schema.
-- Also expose a second tiny tool `health()` returning `{status:"ok", version}`.
-- Server package: `npx overreach` should start it on `$PORT` (default 8787) or stdio if no port.
-- Config snippet to publish in docs (for Claude Desktop):
-  ```
-  { "mcpServers": { "overreach": { "command": "npx", "args": ["overreach"] } } }
-  ```
-
----
-
-## TECH STACK
-- **Language:** TypeScript / Node.js (MCP SDK is TS-first; agents run it via npx).
-- MCP SDK: `@modelcontextprotocol/sdk`
-- LLM call: Anthropic SDK (`@anthropic-ai/sdk`) OR OpenAI-compatible — read key from
-  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`. Use the cheapest fast model available.
-- Diff parsing: hand-written regex in `src/parsers/diff.ts`. No heavy deps.
-- No database in V1. No auth. Stateless.
-
-## FILE STRUCTURE (build exactly this)
 ```
 overreach/
-  CLAUDE.md            (this file — keep it; update if scope changes)
-  README.md            (human-facing: what it is, install, 1 example)
+  CLAUDE.md              ← this file
+  README.md              ← human-facing docs
   package.json
   tsconfig.json
+  action.yml             ← GitHub Action definition
+
   src/
-    index.ts           (MCP server entry: register tools, start transport)
+    cli.ts               ← CLI entry point (interactive + piped modes)
+    index.ts             ← MCP server entry (--serve / overreach-server)
+    blast_radius.ts      ← Heads Up pattern warnings (17 patterns)
+    config.ts            ← env vars, provider/model resolution
+    demo.ts              ← built-in demo diff/prompt/scope
+    init.ts              ← `overreach init` (pre-commit hook scaffolding)
+    sanitize.ts          ← prompt/diff size measurement for telemetry
+    telemetry.ts         ← anonymous usage stats (opt-in)
+    types.ts             ← core type definitions (Scope, Actual, Finding, CheckResult)
+    utils.ts             ← shared utilities
+
     tools/
-      check_overreach.ts  (orchestrates the 3 stages; the public tool)
+      check_overreach.ts ← 3-stage orchestrator (the core product)
+
     scope/
-      extract_scope.ts    (Stage 1: prompt -> scope JSON via LLM)
+      extract_scope.ts   ← Stage 1: prompt → scope JSON via LLM
+      extract_deterministic.ts ← zero-key fallback (regex scope extraction)
+      cache.ts           ← scope cache by hash(prompt+provider+model)
+
     parsers/
-      diff.ts             (Stage 2: diff -> actual; regex-based, per-language)
+      diff.ts            ← Stage 2: diff → actual (regex, no LLM)
+
     compare/
-      diff_scope.ts       (Stage 3: actual - scope -> findings + score)
-    config.ts          (env keys, model choice)
+      diff_scope.ts      ← Stage 3: actual − scope → findings
+
+    # Coordination layer — LEGACY, not the focus (see "What we moved away from")
+    # ~29% of codebase, ~1,562 lines. Still compiles and tests pass but
+    # nobody uses it. Do NOT build new features on top of this layer.
+    # Do NOT promote it in README, help text, or marketing.
+    # Candidate for removal in a future cleanup pass.
+    check_in.ts          ← agent check-in system
+    claims.ts            ← file claim management
+    collide.ts           ← collision detection
+    coord_check.ts       ← CI coordination gate
+    ledger.ts            ← coordination ledger
+    resolve.ts           ← conflict resolution
+    scope_dsl.ts         ← scope DSL parser
+    contract/            ← narrow contract schema
+    handoff/             ← agent handoff validation
+
   tests/
-    fixtures/
-      login_form_stripe.diff     (the canonical example: prompt asks for login form,
-                                   diff adds login form + stripe + env + endpoint + cron)
-      clean_scope.diff           (diff that matches prompt exactly -> findings=[])
-    check_overreach.test.ts  (assert: stripe diff flags 4 findings, score HIGH;
-                              clean diff flags 0, score LOW)
+    run.ts               ← test runner (444 assertions)
+    taxonomy_tests.ts    ← finding-kind taxonomy tests
+    edge_and_smuggle.ts  ← adversarial/edge-case tests
+    real_world_tests.ts  ← real-repo validation tests
+    simulate.ts          ← simulation tests
+    simulate_stress.ts   ← stress tests (100+ files)
+    fixtures/            ← 19 diff/scope fixture pairs
+
+  docs/
+    ci-gate.md           ← GitHub Action CI gate docs
+    listings.md          ← marketplace listing metadata
+
+  worker/               ← Cloudflare Worker for telemetry
 ```
 
-## BUILD ORDER (do this, in this order)
-1. `package.json` + `tsconfig.json` + `src/config.ts`. Install `@modelcontextprotocol/sdk`
-   and the LLM SDK. Make `npm run build` and `npm start` work (even if tools are stubs).
-2. `src/parsers/diff.ts` — write + unit-test the regex extractors against the two fixtures.
-   This must pass BEFORE anything else, with no LLM.
-3. `src/scope/extract_scope.ts` — the LLM call with the exact system prompt above; validate
-   JSON schema strictly.
-4. `src/compare/diff_scope.ts` — set arithmetic + severity + score.
-5. `src/tools/check_overreach.ts` — wire the 3 stages together.
-6. `src/index.ts` — register the MCP tools, start Streamable HTTP on $PORT.
-7. `tests/check_overreach.test.ts` — run both fixtures end-to-end.
-8. `README.md` — install + the one example.
+---
 
-## THE ONE RISK TO DESIGN AROUND
-**Fox guarding the henhouse:** an agent can skip the call or ignore findings. The tool
-is the *first line*, not the only line. The CI gate (separate GitHub Action, out of V1
-scope) is the hard backstop. Document this honestly in the README so buyers know the
-tool-call version is best-effort self-audit, not enforcement.
+## Running the project
 
-## ACCEPTANCE CRITERIA (the build is done when all pass)
-1. `npm start` launches an MCP server a Claude Desktop config can connect to.
-2. Calling `check_overreach` with `fixtures/login_form_stripe.diff` and the prompt
-   "add a login form to the settings page" returns ≥4 findings including
-   `scope.dep` (stripe), `scope.env` (STRIPE_SECRET),
-   `scope.endpoint` (/api/checkout), `scope.cron`; `scope_creep_score=HIGH`.
-3. Calling it with `fixtures/clean_scope.diff` and a matching prompt returns
-   `findings=[]`, `scope_creep_score=LOW`.
-4. Stage 2 runs with zero LLM calls (verify by mocking the LLM to throw and confirming
-   the parser still returns `actual`).
-5. Total latency for a 500-line diff < 3s (dominated by the single scope-extraction call).
-6. `npx overreach` works after `npm run build`.
+```bash
+npm run build           # TypeScript compile
+npm test                # 444 deterministic assertions, zero API key
+npx tsx src/cli.ts demo # zero-key demo (no build needed)
+npx tsx src/cli.ts --serve  # start MCP server (dev)
+```
 
-## VALIDATION (do AFTER the build passes acceptance, not before)
-Post in r/ClaudeAI and r/cursor:
-> "Has your AI agent ever shipped a route/dep/env var you never asked for? I built an
-> MCP tool that audits your diff against your actual prompt and flags everything
-> out-of-scope. Free while testing — anyone want in?"
-Count yes replies. The hook writes itself: *"I asked it to add a login form. It also
-added Stripe. Overreach catches that."*
+## Test fixtures (19 pairs)
 
-## DISTRIBUTION
-After acceptance: list on mcp.so, Smithery, and the awesome-mcp-servers GitHub list
-(submission metadata: name, one-line desc <160 chars, tool list, transport=Streamable
-HTTP, auth=none, npx install snippet). This is how agents discover the tool — the
-sell-to-agents distribution model.
+Each fixture is a `.diff` + `.scope.json` pair in `tests/fixtures/`:
+
+analytics_injection, clean_scope, config_drift, css_design_drift,
+database_creep, deletions_only, django_auth_injection, docker_infra, empty,
+express_overreach, library_swap, logging_injection, login_form_stripe,
+partial_scope, python_fastapi_overreach, security_overreach, shopify_size_chart,
+test_sprawl, websocket_creep
 
 ---
-That is the entire product. Build exactly this. Nothing more in V1.
+
+## Hard constraints
+
+- **Never write API keys into this project.** Keys are sourced from env vars
+  at runtime only. The user runs on Ollama Cloud (`SCOPE_PROVIDER=ollama`
+  `OLLAMA_BASE_URL=https://ollama.com` `OVERREACH_MODEL=glm-5.2`) — the key
+  comes from FounderSignal's `.env`, never persisted in Overreach.
+
+- **The FindingKind set is frozen.** Adding a new kind requires an amendment
+  in this file with a stated justification. The test suite enforces this.
+
+- **Blast radius warnings are NOT findings.** They must never appear in the
+  `findings` array or affect `scope_creep_score`. Separate output section,
+  separate JSON key.
+
+- **Stage 2 and Stage 3 are pure functions.** No LLM calls, no network, no
+  randomness. Must be 100% deterministic and reproducible.
+
+---
+
+## What this is NOT
+
+- NOT a linter / formatter / code-quality reviewer
+- NOT spec-driven development (checking code vs a formal spec doc)
+- NOT prompt-injection detection
+- NOT security scanning (hardcoded-secret warning in blast radius is advisory, not a finding)
+- NOT AST-perfect analysis — uses regex + light parsing
+- NOT a multi-agent coordination platform (we built this, nobody used it — see
+  "What we moved away from" above. The code still exists but don't build on it)
+- NOT an MCP-first tool anymore — CLI for humans first, MCP for agents second
